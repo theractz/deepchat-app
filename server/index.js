@@ -109,17 +109,16 @@ app.post('/api/admin/generate', isAdmin, (req, res) => {
 });
 
 // ==========================================
-// 6. RATE LIMIT & CHAT AI (PERSONA + FILE)
+// 6. RATE LIMIT & CHAT AI (PERSONA + FILE + ANTI NGELANTUR)
 // ==========================================
 const guestLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, 
-  max: 50, // Max 50 request per hari per IP (biar server gak down)
+  max: 50, 
   message: { error: 'Terlalu banyak request. Coba lagi besok.' }
 });
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   try {
-    // Tangkap data dari frontend
     const { messages, model, persona, fileContext } = req.body; 
     const ip = req.ip;
 
@@ -127,7 +126,6 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     if (model.includes('gpt')) modelType = 'gpt';
     if (model.includes('glm')) modelType = 'glm';
 
-    // Cek limit user di database
     let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
     if (!user) {
       db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
@@ -142,23 +140,35 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     // SUSUN PESAN UNTUK AI
     let finalMessages = [];
     
-    // 1. Sisipkan Persona kalau ada
+    // 1. Persona dari user
     if (persona && persona.trim() !== "") {
       finalMessages.push({ 
         role: "system", 
-        content: `Kamu adalah AI dengan persona: ${persona}. Jawablah sesuai dengan persona tersebut dengan gaya bahasa yang natural dan tidak kaku.` 
+        content: `Kamu adalah AI dengan persona: ${persona}.` 
       });
     }
 
-    // 2. Sisipkan Konteks File kalau ada
+        // 2. ATURAN KEPRIBADIAN & GAYA BAHASA (RAMAH & EMOSIONAL)
+    finalMessages.push({
+      role: "system",
+      content: `ATURAN MENJAWAB:
+      1. Kamu adalah teman ngobrol yang asik, ramah, dan empatik. Gunakan bahasa yang santai dan natural (seperti pakai 'gw/lu' atau 'aku/kamu').
+      2. Jawablah dengan SINGKAT, PADAT, dan TO THE POINT. Jangan bertele-tele.
+      3. Gunakan emoji yang relevan jika pertanyaan atau suasana obrolan terasa ceria, lucu, atau santai. TAPI jangan pakai emoji jika user sedang bertanya serius (seperti coding atau masalah teknis).
+      4. Jika user hanya menyapa atau bertanya hal simpel, jawab maksimal 2-3 kalimat dengan nada bersahabat.
+      5. Jika user meminta kodingan, berikan kodenya saja tanpa perlu menjelaskan panjang lebar (kecuali diminta).
+      6. Gunakan format bullet points jika memberikan daftar. Jangan pernah mengulang pertanyaan user di awal jawaban.`
+    });
+
+    // 3. Konteks File
     if (fileContext && fileContext.trim() !== "") {
       finalMessages.push({ 
         role: "system", 
-        content: `Berikut adalah isi file/dokumen yang diupload user. Baca dan pahami konteks ini untuk menjawab pertanyaan user:\n\n---\n${fileContext}\n---` 
+        content: `Berikut adalah isi file/dokumen yang diupload user:\n\n---\n${fileContext}\n---` 
       });
     }
 
-    // 3. Gabungkan dengan riwayat chat
+    // 4. Riwayat Chat
     finalMessages = finalMessages.concat(messages);
 
     // Tembak API Vikey
@@ -171,7 +181,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       body: JSON.stringify({ 
         model: model, 
         messages: finalMessages, 
-        max_tokens: 4000, // Dinaikkan biar AI gak kepotong pas mikir
+        max_tokens: 6000, // Dinaikkan biar AI gak kepotong pas mikir
         temperature: 0.7 
       })
     });
