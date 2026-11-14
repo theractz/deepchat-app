@@ -1,33 +1,24 @@
 :root {
-  /* Warna Dasar */
   --bg-base: #09090b;
   --bg-elevated: #18181b;
   --bg-glass: rgba(24, 24, 27, 0.55);
   --bg-glass-strong: rgba(24, 24, 27, 0.85);
   --border-glass: rgba(255, 255, 255, 0.08);
   --border-glass-hover: rgba(255, 255, 255, 0.16);
-  
-  /* Warna Aksen */
   --accent: #6366f1;
   --accent-hover: #818cf8;
   --accent-glow: rgba(99, 102, 241, 0.35);
-  
-  /* Teks */
   --text-primary: #fafafa;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
-  
-  /* Font & Bentuk */
   --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --radius-sm: 10px;
   --radius-md: 16px;
   --radius-lg: 24px;
   --radius-full: 9999px;
-  
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --duration: 0.3s;
-  
   --sidebar-width: 280px;
   --header-height: 64px;
 }
@@ -57,7 +48,6 @@ body {
   66% { transform: translate(-20px, 20px) scale(0.9); }
 }
 
-/* Glass Utility */
 .glass {
   background: var(--bg-glass);
   backdrop-filter: blur(24px) saturate(180%);
@@ -105,10 +95,7 @@ body {
 
 .credits-card { border-radius: var(--radius-md); padding: 14px; display: flex; flex-direction: column; gap: 6px; }
 .credits-header { display: flex; align-items: center; justify-content: space-between; }
-.credits-badge {
-  background: var(--accent); color: white; padding: 2px 10px;
-  border-radius: var(--radius-full); font-size: 0.8rem; font-weight: 600; font-family: var(--font-mono);
-}
+.credits-badge { background: var(--accent); color: white; padding: 2px 10px; border-radius: var(--radius-full); font-size: 0.8rem; font-weight: 600; font-family: var(--font-mono); }
 .credits-hint { font-size: 0.75rem; color: var(--text-muted); }
 .redeem-btn {
   margin-top: 6px; padding: 8px; border-radius: var(--radius-sm);
@@ -117,7 +104,7 @@ body {
 }
 .redeem-btn:hover { background: var(--border-glass-hover); }
 
-/* Overlay Mobile */
+/* Overlay */
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(4px); opacity: 0; pointer-events: none;
@@ -153,10 +140,7 @@ body {
 .welcome h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 8px; }
 .welcome p { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 24px; }
 .suggestions { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 400px; }
-.suggestion {
-  padding: 12px 16px; border-radius: var(--radius-md); color: var(--text-primary); font-family: inherit;
-  font-size: 0.85rem; cursor: pointer; text-align: left; transition: all var(--duration) var(--ease-out);
-}
+.suggestion { padding: 12px 16px; border-radius: var(--radius-md); color: var(--text-primary); font-family: inherit; font-size: 0.85rem; cursor: pointer; text-align: left; transition: all var(--duration) var(--ease-out); }
 .suggestion:hover { background: var(--border-glass-hover); transform: translateY(-2px); }
 
 /* Message Bubble */
@@ -167,42 +151,56 @@ body {
 .msg-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 600; }
 .message.user .msg-avatar { background: linear-gradient(135deg, var(--accent), #8b5cf6); }
 .message.ai .msg-avatar { background: var(--bg-elevated); border: 1px solid var(--border-glass); }
-.msg-content { padding: 12px 16px; border-radius: var(--radius-md); font-size: 0.9rem; line-height: 1.6; word-wrap: break-word; position: relative; }
+.msg-content { padding: 12px 16px; border-radius: var(--radius-md); font-size: 0.9rem; line-height: 1.6; word-wrap: break-word; position: relative; overflow: hidden; }
 .message.user .msg-content { background: var(--accent); color: white; border-bottom-right-radius: 4px; }
 .message.ai .msg-content { background: var(--bg-glass); backdrop-filter: blur(16px); border: 1px solid var(--border-glass); border-bottom-left-radius: 4px; }
 
-/* Code Block */
-.code-wrapper { position: relative; margin: 10px 0; }
+/* --- CODE WRAPPER (FIX SCROLL) --- */
+.code-wrapper {
+  position: relative;
+  margin: 12px 0;
+  background: #0d0d0f;
+  border-radius: 8px;
+  border: 1px solid #27272a;
+  overflow: hidden;
+  max-width: 100%;
+}
+
 .code-wrapper pre {
-  background: #0d0d0f; padding: 16px; border-radius: var(--radius-sm); overflow-x: auto;
-  margin: 0; font-family: var(--font-mono); font-size: 0.85rem; border: 1px solid #27272a; color: #e4e4e7;
+  margin: 0;
+  padding: 16px;
+  overflow-x: auto; /* Scroll cuma di sini */
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.85rem;
+  color: #e4e4e7;
+  white-space: pre;
+  max-width: 100%;
 }
-.msg-content code { font-family: var(--font-mono); font-size: 0.85rem; }
 
-/* Syntax Colors */
-.token-keyword { color: #c084fc; }
-.token-function { color: #60a5fa; }
-.token-string { color: #86efac; }
-.token-comment { color: #71717a; font-style: italic; }
-.token-number { color: #fca5a5; }
-.token-operator { color: #fbbf24; }
+.code-wrapper pre::-webkit-scrollbar { height: 6px; }
+.code-wrapper pre::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
 
-/* Copy Button */
 .copy-code-btn {
-  position: absolute; top: 8px; right: 8px; padding: 4px 8px; border-radius: 6px;
-  background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-glass); color: var(--text-secondary);
-  font-size: 0.7rem; cursor: pointer; opacity: 0; transition: all var(--duration) var(--ease-out); z-index: 2;
+  position: absolute; top: 8px; right: 8px; background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2); color: #fff; padding: 4px 10px; border-radius: 4px;
+  font-size: 0.75rem; cursor: pointer; transition: 0.2s; z-index: 10;
 }
-.code-wrapper:hover .copy-code-btn { opacity: 1; }
-.copy-code-btn:hover { background: var(--border-glass-hover); color: var(--text-primary); }
+.copy-code-btn:hover { background: rgba(255, 255, 255, 0.2); }
 
-/* Typing Indicator */
-.typing-indicator { display: none; padding: 0 16px 8px; gap: 4px; }
-.typing-indicator.active { display: flex; }
-.typing-indicator span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); animation: bounce 1.4s infinite ease-in-out both; }
-.typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-.typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-@keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+/* --- SYNTAX COLORS --- */
+.token-keyword { color: #c084fc; } 
+.token-string { color: #86efac; }  
+.token-comment { color: #71717a; font-style: italic; } 
+.token-number { color: #fca5a5; }  
+.token-function { color: #60a5fa; } 
+.token-operator { color: #fbbf24; } 
+.token-variable { color: #f472b6; } 
+.token-tag { color: #f87171; }      
+.token-attr { color: #fbbf24; }     
+
+/* Riwayat Chat */
+.history-item { padding: 8px 12px; border-radius: 8px; font-size: 0.85rem; color: var(--text-secondary); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: 0.2s; }
+.history-item:hover { background: var(--border-glass); color: var(--text-primary); }
 
 /* Composer */
 .composer {
@@ -233,15 +231,6 @@ body {
 .btn-secondary { background: var(--border-glass); border: 1px solid var(--border-glass); color: var(--text-primary); }
 .btn-primary { background: var(--accent); border: none; color: white; }
 
-/* Auth Screen */
-.auth-screen { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center; background: var(--bg-base); }
-.auth-box { width: 100%; max-width: 360px; padding: 32px; background: var(--bg-glass-strong); border-radius: var(--radius-lg); border: 1px solid var(--border-glass); text-align: center; }
-.auth-box h2 { margin-bottom: 8px; font-weight: 500; }
-.auth-box p { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 24px; }
-.auth-box input { width: 100%; padding: 12px; margin-bottom: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-glass); background: var(--bg-elevated); color: var(--text-primary); outline: none; }
-.auth-box button { width: 100%; padding: 12px; border-radius: var(--radius-sm); background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
-.error-text { color: #ef4444 !important; font-size: 0.8rem; margin-top: 10px; }
-
 /* Responsive */
 .menu-btn { display: flex; }
 @media (min-width: 768px) {
@@ -253,74 +242,4 @@ body {
   .composer { margin: 12px 10% 24px; }
   .welcome h2 { font-size: 1.8rem; }
   .welcome p { font-size: 1rem; }
-}
-
-/* Style Tombol Beli di Modal */
-.modal-content .btn-primary {
-  background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: transform 0.2s;
-}
-.modal-content .btn-primary:hover {
-  transform: scale(1.05);
-  background: var(--accent-hover);
-}
-
-/* --- CODE WRAPPER (BIAR KOTAK KODE MUNCUL) --- */
-.code-wrapper {
-  position: relative;
-  margin: 12px 0;
-  background: #0d0d0f;
-  border-radius: 8px;
-  border: 1px solid #27272a;
-  overflow: hidden;
-}
-
-.code-wrapper pre {
-  margin: 0;
-  padding: 16px;
-  overflow-x: auto;
-  font-family: 'Geist Mono', monospace;
-  font-size: 0.85rem;
-  color: #e4e4e7;
-}
-
-.copy-code-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  cursor: pointer;
-  transition: 0.2s;
-  z-index: 10;
-}
-
-.copy-code-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* --- RIWAYAT CHAT --- */
-.history-item {
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: 0.2s;
-}
-.history-item:hover {
-  background: var(--border-glass);
-  color: var(--text-primary);
 }

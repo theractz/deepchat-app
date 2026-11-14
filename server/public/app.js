@@ -5,7 +5,7 @@ const state = {
   isTyping: false,
   messages: [],
   currentChatId: null,
-  persona: localStorage.getItem('deepchat_persona') || "", // Ambil persona dari storage
+  persona: localStorage.getItem('deepchat_persona') || "",
 };
 
 let uploadedFileContext = ""; 
@@ -58,11 +58,10 @@ document.getElementById('modelSelect').addEventListener('change', (e) => {
 const settingsModal = document.getElementById('settingsModal');
 const personaInput = document.getElementById('personaInput');
 
-// Set nilai awal textarea dari state saat pertama kali load
 personaInput.value = state.persona;
 
 document.getElementById('settingsBtn').addEventListener('click', () => {
-  personaInput.value = state.persona; // Update nilai terbaru
+  personaInput.value = state.persona;
   settingsModal.classList.add('active');
 });
 
@@ -72,7 +71,7 @@ document.getElementById('closeSettingsBtn').addEventListener('click', () => {
 
 document.getElementById('saveSettingsBtn').addEventListener('click', () => {
   state.persona = personaInput.value.trim();
-  localStorage.setItem('deepchat_persona', state.persona); // Simpan permanen di browser
+  localStorage.setItem('deepchat_persona', state.persona);
   alert('Persona berhasil disimpan!');
   settingsModal.classList.remove('active');
 });
@@ -133,24 +132,33 @@ window.handleFileUpload = function(event) {
 };
 
 // ==========================================
-// 5. SYNTAX HIGHLIGHT & FORMAT
+// 5. SYNTAX HIGHLIGHTING UPGRADE
 // ==========================================
-function highlightCode(code) {
+function highlightCode(code, lang) {
   let h = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  h = h.replace(/(['"`])(?:(?!\1).)*\1/g, '<span style="color:#86efac">$&</span>');
-  h = h.replace(/(\/\/.*|\/\*[\s\S]*?\*\/)/g, '<span style="color:#71717a;font-style:italic">$1</span>');
-  h = h.replace(/\b(function|const|let|var|if|else|return|for|while|switch|case|break|continue|new|class|extends|import|export|from|default|try|catch|finally|throw|async|await|this|typeof)\b/g, '<span style="color:#c084fc">$1</span>');
-  h = h.replace(/\b(\d+)\b/g, '<span style="color:#fca5a5">$1</span>');
+
+  h = h.replace(/(['"`])(?:(?!\1).)*\1/g, '<span class="token-string">$&</span>');
+  h = h.replace(/(\/\/.*|\/\*[\s\S]*?\*\/|#.*)/g, '<span class="token-comment">$1</span>');
+  
+  const jsKeywords = /\b(function|const|let|var|if|else|return|for|while|switch|case|break|continue|new|class|extends|import|export|from|default|try|catch|finally|throw|async|await|this|typeof|instanceof|in|of|console|log|document|window)\b/g;
+  h = h.replace(jsKeywords, '<span class="token-keyword">$1</span>');
+
+  h = h.replace(/\b(\d+)\b/g, '<span class="token-number">$1</span>');
+  h = h.replace(/(\+|\-|\*|\/|===|==|=>|=|\+\+|--)/g, '<span class="token-operator">$1</span>');
+
   return h;
 }
 
 function formatMessage(text) {
   const parts = text.split(/(```[\s\S]*?```)/g);
+  
   return parts.map(part => {
     if (part.startsWith('```') && part.endsWith('```')) {
       const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
+      const lang = match ? match[1].toLowerCase() : 'text';
       const rawCode = match ? match[2].trim() : part.replace(/```/g, '').trim();
-      const highlighted = highlightCode(rawCode);
+      
+      const highlighted = highlightCode(rawCode, lang);
       const escapedAttr = rawCode.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       
       return `<div class="code-wrapper">
@@ -160,7 +168,7 @@ function formatMessage(text) {
     } else {
       let txt = part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       txt = txt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      txt = txt.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;">$1</code>');
+      txt = txt.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;color:#fca5a5;">$1</code>');
       return txt.replace(/\n/g, '<br>');
     }
   }).join('');
@@ -261,7 +269,6 @@ async function sendMessage() {
 
     if (cleanMessages.length > 0 && cleanMessages[0].role === 'assistant') cleanMessages.shift();
 
-    // AMBIL PERSONA DARI STATE
     const persona = state.persona;
 
     const res = await fetch('/api/chat', {
@@ -269,7 +276,7 @@ async function sendMessage() {
       body: JSON.stringify({ 
         messages: cleanMessages, 
         model: state.model,
-        persona: persona, // <-- Kirim persona
+        persona: persona,
         fileContext: uploadedFileContext
       })
     });
@@ -280,7 +287,7 @@ async function sendMessage() {
     addMessage('ai', data.reply);
     await fetchCredits(); 
     
-    uploadedFileContext = ""; // Reset context file
+    uploadedFileContext = ""; 
   } catch (err) {
     addMessage('ai', `Error: ${err.message}`);
   } finally {
@@ -323,7 +330,7 @@ document.getElementById('newChatBtn').addEventListener('click', () => {
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="url(#logoGradient)"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>
       </div>
       <h2>Selamat datang di DeepChat</h2>
-      <p>Pilih model di sidebar, upload file, atau atur persona di setting, lalu mulai chat.</p>
+      <p>Pilih model di sidebar, upload file, atau atur persona di setting.</p>
     </div>
   `;
   document.getElementById('sidebar').classList.remove('open');
