@@ -12,7 +12,6 @@ const PORT = process.env.PORT || 3000;
 // ==========================================
 // 1. SETUP DATABASE (ANTI HILANG DI RAILWAY)
 // ==========================================
-// Kalau di Railway, simpan di folder /data (Volume). Kalau di lokal, simpan di folder server.
 const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'database.sqlite') 
   : path.join(__dirname, 'database.sqlite');
@@ -35,19 +34,25 @@ if (checkCodes.count === 0) {
 }
 
 // ==========================================
-// 2. MIDDLEWARE
+// 2. MIDDLEWARE & STATIC FILES (FIXED PATH)
 // ==========================================
 app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, '../public')));
-app.set('trust proxy', 1); // Penting buat Railway (IP asli user)
+
+// FIX: Arahkan ke folder public yang sekarang ada di DALAM folder server
+app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', 1); 
 
 // ==========================================
-// 3. ROUTING UTAMA & LANDING PAGE
+// 3. ROUTING HALAMAN (FIXED PATH)
 // ==========================================
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/landing.html'));
+  res.sendFile(path.join(__dirname, 'public', 'landing.html'));
+});
+
+app.get('/admin-login.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-login.html'));
 });
 
 // ==========================================
@@ -77,7 +82,7 @@ app.post('/api/admin/logout', (req, res) => {
 });
 
 app.get('/panel-rahasia', isAdmin, (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/admin.html'));
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 // ==========================================
@@ -123,7 +128,6 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     if (model.includes('gpt')) modelType = 'gpt';
     if (model.includes('glm')) modelType = 'glm';
 
-    // Cek user di database
     let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
     if (!user) {
       db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
@@ -135,7 +139,6 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
     }
 
-    // Tembak Vikey
     const vikeyResponse = await fetch(`${process.env.VIKEY_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: { 
@@ -145,7 +148,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       body: JSON.stringify({ 
         model: model, 
         messages: messages, 
-        max_tokens: 4000, // Dinaikkan biar DeepSeek nggak kepotong pas mikir
+        max_tokens: 4000, 
         temperature: 0.7 
       })
     });
@@ -156,7 +159,6 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       throw new Error(data.error?.message || 'Gagal memanggil API Vikey');
     }
 
-    // Potong limit
     db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - 1 WHERE ip = ?`).run(ip);
     
     res.json({ reply: data.choices[0].message.content });
@@ -203,9 +205,10 @@ app.post('/api/redeem', (req, res) => {
   }
 });
 
-// Paksa pakai port dari Railway, kalau nggak ada baru pakai 3000
-const listenPort = process.env.PORT || 3000;
-
-app.listen(listenPort, '0.0.0.0', () => {
-  console.log(`🚀 Server jalan di port ${listenPort}`);
+// ==========================================
+// 8. JALANKAN SERVER
+// ==========================================
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server jalan di port ${PORT}`);
+  console.log(`🔐 Panel Admin: /admin-login.html`);
 });
