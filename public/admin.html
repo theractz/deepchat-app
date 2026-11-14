@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Panel — DeepChat</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .admin-container { max-width: 500px; margin: 50px auto; padding: 30px; background: var(--bg-glass-strong); border: 1px solid var(--border-glass); border-radius: var(--radius-lg); backdrop-filter: blur(20px); }
+    .header-admin { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .header-admin h1 { font-size: 1.5rem; }
+    .btn-logout { background: transparent; color: #ef4444; border: 1px solid #ef4444; padding: 6px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.8rem; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: var(--text-secondary); }
+    .form-group input, .form-group select { width: 100%; padding: 12px; border-radius: var(--radius-sm); background: var(--bg-elevated); border: 1px solid var(--border-glass); color: var(--text-primary); outline: none; font-family: inherit; }
+    .btn-generate { width: 100%; padding: 14px; border-radius: var(--radius-sm); background: var(--accent); color: white; font-weight: 600; border: none; cursor: pointer; margin-top: 10px; }
+    .result-box { margin-top: 20px; padding: 16px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); display: none; text-align: center; }
+    .token-text { font-family: var(--font-mono); font-size: 1.2rem; font-weight: bold; color: white; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+  <div class="orb orb-1"></div>
+  <div class="admin-container">
+    <div class="header-admin">
+      <h1>🔐 Admin Panel</h1>
+      <button class="btn-logout" id="logoutBtn">Logout</button>
+    </div>
+    
+    <div class="form-group">
+      <label>Nama / Prefix Kode (Tanpa Spasi)</label>
+      <input type="text" id="tokenPrefix" placeholder="Contoh: PROMO-MERDEKA" oninput="this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '')">
+    </div>
+
+    <div class="form-group">
+      <label>Pilih Model AI</label>
+      <select id="modelTarget">
+        <option value="deepseek">DeepSeek V4.1</option>
+        <option value="gpt">GPT-6 Luna</option>
+        <option value="glm">GLM-5.3 Flash</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Jumlah Limit (Chat)</label>
+      <input type="number" id="tokenAmount" value="50" min="1">
+    </div>
+
+    <button class="btn-generate" id="generateBtn">Generate Kode Voucher</button>
+
+    <div class="result-box" id="resultBox">
+      <h3 style="color:#22c55e; margin-bottom:8px;">✅ Berhasil Dibuat!</h3>
+      <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Kirim kode ini ke pembeli:</p>
+      <div class="token-text" id="resultToken"></div>
+    </div>
+  </div>
+
+  <script>
+    // Tombol Logout
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      window.location.href = '/admin-login.html';
+    });
+
+    // Generate Token
+    document.getElementById('generateBtn').addEventListener('click', async () => {
+      const prefix = document.getElementById('tokenPrefix').value.trim();
+      const model = document.getElementById('modelTarget').value;
+      const amount = parseInt(document.getElementById('tokenAmount').value);
+
+      if (!prefix || !amount) return alert('Isi semua kolom!');
+
+      const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+      const finalCode = `${prefix}-${randomStr}`;
+
+      const btn = document.getElementById('generateBtn');
+      btn.textContent = 'Memproses...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/admin/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: finalCode, model, amount })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        document.getElementById('resultBox').style.display = 'block';
+        document.getElementById('resultToken').textContent = finalCode;
+        document.getElementById('tokenPrefix').value = '';
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.textContent = 'Generate Kode Voucher';
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
