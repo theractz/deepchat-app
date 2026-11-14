@@ -203,10 +203,9 @@ app.post('/api/redeem', (req, res) => {
   }
 });
 
-// ==========================================
-// 8. JALANKAN SERVER
-// ==========================================
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server jalan di port ${PORT}`);
-  console.log(`🔐 Panel Admin: /admin-login.html`);
+// Paksa pakai port dari Railway, kalau nggak ada baru pakai 3000
+const listenPort = process.env.PORT || 3000;
+
+app.listen(listenPort, '0.0.0.0', () => {
+  console.log(`🚀 Server jalan di port ${listenPort}`);
 });
