@@ -4,8 +4,11 @@ const state = {
   model: 'deepseek/deepseek-v4.1-flash',
   isTyping: false,
   messages: [],
-  currentChatId: null, // ID buat nyimpen history
+  currentChatId: null,
+  persona: localStorage.getItem('deepchat_persona') || "", // Ambil persona dari storage
 };
+
+let uploadedFileContext = ""; 
 
 // ==========================================
 // 1. MANAJEMEN LIMIT & MODEL
@@ -50,7 +53,32 @@ document.getElementById('modelSelect').addEventListener('change', (e) => {
 });
 
 // ==========================================
-// 2. REDEEM KODE
+// 2. MODAL SETTINGS & PERSONA
+// ==========================================
+const settingsModal = document.getElementById('settingsModal');
+const personaInput = document.getElementById('personaInput');
+
+// Set nilai awal textarea dari state saat pertama kali load
+personaInput.value = state.persona;
+
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  personaInput.value = state.persona; // Update nilai terbaru
+  settingsModal.classList.add('active');
+});
+
+document.getElementById('closeSettingsBtn').addEventListener('click', () => {
+  settingsModal.classList.remove('active');
+});
+
+document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+  state.persona = personaInput.value.trim();
+  localStorage.setItem('deepchat_persona', state.persona); // Simpan permanen di browser
+  alert('Persona berhasil disimpan!');
+  settingsModal.classList.remove('active');
+});
+
+// ==========================================
+// 3. REDEEM KODE
 // ==========================================
 document.getElementById('redeemBtn').addEventListener('click', () => document.getElementById('redeemModal').classList.add('active'));
 document.getElementById('cancelRedeem').addEventListener('click', () => document.getElementById('redeemModal').classList.remove('active'));
@@ -76,27 +104,52 @@ document.getElementById('confirmRedeem').addEventListener('click', async () => {
 });
 
 // ==========================================
-// 3. SYNTAX HIGHLIGHT (METODE SPLIT - ANTI GAGAL)
+// 4. FITUR UPLOAD FILE
+// ==========================================
+window.handleFileUpload = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (file.size > 2 * 1024 * 1024) {
+    alert('File terlalu besar. Maksimal 2MB.');
+    event.target.value = '';
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    uploadedFileContext = e.target.result; 
+    const inputEl = document.getElementById('input');
+    inputEl.placeholder = `File "${file.name}" siap ditanya...`;
+    inputEl.style.color = '#22c55e'; 
+    setTimeout(() => {
+      inputEl.placeholder = 'Ketik pesan...';
+      inputEl.style.color = 'var(--text-primary)';
+    }, 3000);
+  };
+  
+  reader.readAsText(file); 
+  event.target.value = ''; 
+};
+
+// ==========================================
+// 5. SYNTAX HIGHLIGHT & FORMAT
 // ==========================================
 function highlightCode(code) {
   let h = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  h = h.replace(/(['"`])(?:(?!\1).)*\1/g, '<span style="color:#86efac">$&</span>'); // String
-  h = h.replace(/(\/\/.*|\/\*[\s\S]*?\*\/)/g, '<span style="color:#71717a;font-style:italic">$1</span>'); // Comment
-  h = h.replace(/\b(function|const|let|var|if|else|return|for|while|switch|case|break|continue|new|class|extends|import|export|from|default|try|catch|finally|throw|async|await|this|typeof)\b/g, '<span style="color:#c084fc">$1</span>'); // Keyword
-  h = h.replace(/\b(\d+)\b/g, '<span style="color:#fca5a5">$1</span>'); // Number
+  h = h.replace(/(['"`])(?:(?!\1).)*\1/g, '<span style="color:#86efac">$&</span>');
+  h = h.replace(/(\/\/.*|\/\*[\s\S]*?\*\/)/g, '<span style="color:#71717a;font-style:italic">$1</span>');
+  h = h.replace(/\b(function|const|let|var|if|else|return|for|while|switch|case|break|continue|new|class|extends|import|export|from|default|try|catch|finally|throw|async|await|this|typeof)\b/g, '<span style="color:#c084fc">$1</span>');
+  h = h.replace(/\b(\d+)\b/g, '<span style="color:#fca5a5">$1</span>');
   return h;
 }
 
 function formatMessage(text) {
-  // Pisahkan teks berdasarkan blok kode markdown
   const parts = text.split(/(```[\s\S]*?```)/g);
-  
   return parts.map(part => {
     if (part.startsWith('```') && part.endsWith('```')) {
-      // Ekstrak bahasa dan isi kode
       const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
       const rawCode = match ? match[2].trim() : part.replace(/```/g, '').trim();
-      
       const highlighted = highlightCode(rawCode);
       const escapedAttr = rawCode.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       
@@ -105,7 +158,6 @@ function formatMessage(text) {
         <pre><code>${highlighted}</code></pre>
       </div>`;
     } else {
-      // Format teks biasa
       let txt = part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       txt = txt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
       txt = txt.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;">$1</code>');
@@ -115,7 +167,7 @@ function formatMessage(text) {
 }
 
 // ==========================================
-// 4. CHAT LOGIC & HISTORY LOCALSTORAGE
+// 6. CHAT LOGIC & HISTORY
 // ==========================================
 function addMessage(role, content, saveToHistory = true) {
   const welcome = document.getElementById('welcome');
@@ -151,24 +203,13 @@ function addMessage(role, content, saveToHistory = true) {
   if (saveToHistory) saveChatToLocal();
 }
 
-// --- FITUR HISTORY ---
 function saveChatToLocal() {
-  if (!state.currentChatId) {
-    state.currentChatId = Date.now().toString(); // Bikin ID unik
-  }
-  
+  if (!state.currentChatId) state.currentChatId = Date.now().toString();
   let allChats = JSON.parse(localStorage.getItem('deepchat_history') || '{}');
-  
-  // Ambil judul dari pesan pertama user
   const firstUserMsg = state.messages.find(m => m.role === 'user');
   const title = firstUserMsg ? firstUserMsg.content.substring(0, 30) + '...' : 'Chat Baru';
 
-  allChats[state.currentChatId] = {
-    id: state.currentChatId,
-    title: title,
-    messages: state.messages
-  };
-  
+  allChats[state.currentChatId] = { id: state.currentChatId, title: title, messages: state.messages };
   localStorage.setItem('deepchat_history', JSON.stringify(allChats));
   renderHistory();
 }
@@ -177,8 +218,6 @@ function renderHistory() {
   const list = document.getElementById('chatHistoryList');
   list.innerHTML = '';
   let allChats = JSON.parse(localStorage.getItem('deepchat_history') || '{}');
-  
-  // Urutkan dari yang terbaru
   const sortedChats = Object.values(allChats).sort((a, b) => b.id - a.id);
 
   sortedChats.forEach(chat => {
@@ -197,15 +236,12 @@ function loadChat(id) {
 
   state.currentChatId = id;
   state.messages = [];
-  document.getElementById('messages').innerHTML = ''; // Bersihin layar
-
-  // Render ulang semua pesan
+  document.getElementById('messages').innerHTML = '';
   chat.messages.forEach(msg => addMessage(msg.role, msg.content, false));
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('active');
 }
 
-// --- KIRIM PESAN ---
 async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
@@ -219,18 +255,23 @@ async function sendMessage() {
   document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
 
   try {
-    // Bersihin riwayat dari pesan error
     let cleanMessages = state.messages
       .filter(msg => !msg.content.startsWith('Error:'))
       .map(msg => ({ role: msg.role === 'ai' ? 'assistant' : 'user', content: msg.content }));
 
-    if (cleanMessages.length > 0 && cleanMessages[0].role === 'assistant') {
-      cleanMessages.shift(); 
-    }
+    if (cleanMessages.length > 0 && cleanMessages[0].role === 'assistant') cleanMessages.shift();
+
+    // AMBIL PERSONA DARI STATE
+    const persona = state.persona;
 
     const res = await fetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: cleanMessages, model: state.model })
+      body: JSON.stringify({ 
+        messages: cleanMessages, 
+        model: state.model,
+        persona: persona, // <-- Kirim persona
+        fileContext: uploadedFileContext
+      })
     });
     
     const data = await res.json();
@@ -238,6 +279,8 @@ async function sendMessage() {
     
     addMessage('ai', data.reply);
     await fetchCredits(); 
+    
+    uploadedFileContext = ""; // Reset context file
   } catch (err) {
     addMessage('ai', `Error: ${err.message}`);
   } finally {
@@ -247,7 +290,7 @@ async function sendMessage() {
 }
 
 // ==========================================
-// 5. EVENT LISTENERS
+// 7. EVENT LISTENERS
 // ==========================================
 document.getElementById('sendBtn').addEventListener('click', sendMessage);
 document.getElementById('input').addEventListener('keydown', (e) => {
@@ -271,7 +314,6 @@ document.getElementById('overlay').addEventListener('click', () => {
   document.getElementById('overlay').classList.remove('active');
 });
 
-// FITUR CHAT BARU
 document.getElementById('newChatBtn').addEventListener('click', () => {
   state.currentChatId = null;
   state.messages = [];
@@ -281,14 +323,13 @@ document.getElementById('newChatBtn').addEventListener('click', () => {
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="url(#logoGradient)"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>
       </div>
       <h2>Selamat datang di DeepChat</h2>
-      <p>Pilih model di sidebar, lalu mulai chat.</p>
+      <p>Pilih model di sidebar, upload file, atau atur persona di setting, lalu mulai chat.</p>
     </div>
   `;
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('active');
 });
 
-// FITUR KERANJANG & TAB
 document.getElementById('cartBtn').addEventListener('click', () => document.getElementById('cartModal').classList.add('active'));
 document.getElementById('closeCartBtn').addEventListener('click', () => document.getElementById('cartModal').classList.remove('active'));
 
@@ -309,5 +350,5 @@ window.beliPaket = function(namaPaket, harga) {
 
 // INIT
 fetchCredits();
-renderHistory(); // Tampilkan riwayat saat pertama buka
+renderHistory();
 console.log('DeepChat Ready!');

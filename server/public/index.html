@@ -10,31 +10,15 @@
   <link rel="stylesheet" href="style.css" />
   <style>
     /* Style Tambahan untuk Tab Pricelist */
-    .pricing-tabs {
-      display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; padding-bottom: 8px;
-    }
-    .pricing-tab {
-      padding: 8px 16px; border-radius: var(--radius-full); cursor: pointer;
-      background: var(--bg-elevated); color: var(--text-secondary); font-size: 0.85rem;
-      white-space: nowrap; border: 1px solid var(--border-glass); transition: all 0.2s;
-    }
-    .pricing-tab.active {
-      background: var(--accent); color: white; border-color: var(--accent); font-weight: 500;
-    }
+    .pricing-tabs { display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; padding-bottom: 8px; }
+    .pricing-tab { padding: 8px 16px; border-radius: var(--radius-full); cursor: pointer; background: var(--bg-elevated); color: var(--text-secondary); font-size: 0.85rem; white-space: nowrap; border: 1px solid var(--border-glass); transition: all 0.2s; }
+    .pricing-tab.active { background: var(--accent); color: white; border-color: var(--accent); font-weight: 500; }
     .pricing-content { display: none; flex-direction: column; gap: 12px; }
     .pricing-content.active { display: flex; }
-    
-    .package-card {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 16px; border-radius: var(--radius-md); background: var(--bg-glass); border: 1px solid var(--border-glass);
-    }
+    .package-card { display: flex; justify-content: space-between; align-items: center; padding: 16px; border-radius: var(--radius-md); background: var(--bg-glass); border: 1px solid var(--border-glass); }
     .package-info h4 { font-size: 1rem; margin-bottom: 4px; }
     .package-info p { font-size: 0.8rem; color: var(--text-secondary); }
-    .btn-beli {
-      background: var(--accent); color: white; border: none; padding: 8px 16px;
-      border-radius: var(--radius-sm); cursor: pointer; font-weight: 600; font-size: 0.85rem;
-      white-space: nowrap; transition: transform 0.2s;
-    }
+    .btn-beli { background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer; font-weight: 600; font-size: 0.85rem; white-space: nowrap; transition: transform 0.2s; }
     .btn-beli:hover { transform: scale(1.05); }
     .btn-beli.combo { background: #8b5cf6; }
   </style>
@@ -68,21 +52,16 @@
         </button>
       </div>
 
-      <!-- TOMBOL CHAT BARU -->
       <button class="new-chat-btn" id="newChatBtn">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
         Chat Baru
       </button>
 
-      <!-- RIWAYAT CHAT -->
       <div class="sidebar-section" style="margin-top: 10px; flex: 1; overflow-y: auto;">
         <span class="section-label">Riwayat Chat</span>
-        <div id="chatHistoryList" style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
-          <!-- Riwayat bakal di-generate sama JS -->
-        </div>
+        <div id="chatHistoryList" style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px;"></div>
       </div>
 
-      <!-- PILIH MODEL -->
       <div class="sidebar-section">
         <span class="section-label">Pilih Model</span>
         <div class="model-selector glass">
@@ -94,7 +73,6 @@
         </div>
       </div>
 
-      <!-- LIMIT CARD -->
       <div class="sidebar-section credits-card glass">
         <div class="credits-header">
           <span class="section-label" id="creditLabel">Limit DeepSeek</span>
@@ -126,6 +104,9 @@
               <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
             </svg>
           </button>
+          <button class="icon-btn" id="settingsBtn" aria-label="Pengaturan">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
         </div>
       </header>
 
@@ -138,13 +119,18 @@
             </svg>
           </div>
           <h2>Selamat datang di DeepChat</h2>
-          <p>Pilih model di sidebar, lalu mulai chat.</p>
+          <p>Pilih model di sidebar, upload file, atau atur persona di setting, lalu mulai chat.</p>
         </div>
       </div>
 
       <div class="typing-indicator" id="typingIndicator"><span></span><span></span><span></span></div>
 
       <footer class="composer glass">
+        <label for="fileUpload" class="icon-btn" style="cursor: pointer; margin-bottom: 8px;" title="Upload File Teks">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+        </label>
+        <input type="file" id="fileUpload" accept=".txt,.md,.js,.json,.html,.css,.py,.csv" style="display: none;" onchange="handleFileUpload(event)">
+
         <textarea id="input" rows="1" placeholder="Ketik pesan..." aria-label="Pesan"></textarea>
         <button class="send-btn" id="sendBtn" aria-label="Kirim">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
@@ -166,6 +152,28 @@
     </div>
   </div>
 
+  <!-- Modal Settings -->
+  <div class="modal" id="settingsModal">
+    <div class="modal-content glass">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0;">Pengaturan AI</h3>
+        <button class="icon-btn" id="closeSettingsBtn" style="width: 28px; height: 28px;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <p style="margin-bottom: 16px; font-size: 0.85rem;">Atur kepribadian AI agar jawabannya sesuai dengan gaya yang kamu mau.</p>
+      
+      <div class="form-group" style="text-align: left;">
+        <label style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px; display: block;">Persona AI</label>
+        <textarea id="personaInput" rows="3" placeholder="Contoh: Kamu adalah senior frontend developer yang sarkas dan to the point. Jangan pernah pakai bahasa formal." style="width: 100%; padding: 12px; border-radius: var(--radius-sm); background: var(--bg-elevated); border: 1px solid var(--border-glass); color: var(--text-primary); outline: none; font-family: inherit; resize: none;"></textarea>
+      </div>
+
+      <div class="modal-actions" style="margin-top: 20px;">
+        <button class="btn-primary" id="saveSettingsBtn" style="width: 100%;">Simpan Pengaturan</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Pricelist -->
   <div class="modal" id="cartModal">
     <div class="modal-content glass" style="max-width: 450px; width: 95%;">
@@ -176,7 +184,6 @@
         </button>
       </div>
       
-      <!-- TABS -->
       <div class="pricing-tabs">
         <div class="pricing-tab active" data-tab="ds">DeepSeek</div>
         <div class="pricing-tab" data-tab="gpt">GPT Luna</div>
@@ -184,68 +191,28 @@
         <div class="pricing-tab" data-tab="combo">Combo</div>
       </div>
 
-      <!-- TAB CONTENT: DEEPSEEK -->
       <div class="pricing-content active" id="tab-ds">
-        <div class="package-card">
-          <div class="package-info"><h4>DeepSeek Lite</h4><p>10 Chat DeepSeek</p></div>
-          <button class="btn-beli" onclick="beliPaket('DeepSeek Lite (10 Chat)', 3000)">Rp 3.000</button>
-        </div>
-        <div class="package-card" style="border-color: var(--accent);">
-          <div class="package-info"><h4>DeepSeek Pro</h4><p>30 Chat DeepSeek</p></div>
-          <button class="btn-beli" onclick="beliPaket('DeepSeek Pro (30 Chat)', 8000)">Rp 8.000</button>
-        </div>
-        <div class="package-card">
-          <div class="package-info"><h4>DeepSeek Max</h4><p>100 Chat DeepSeek</p></div>
-          <button class="btn-beli" onclick="beliPaket('DeepSeek Max (100 Chat)', 20000)">Rp 20.000</button>
-        </div>
+        <div class="package-card"><div class="package-info"><h4>DeepSeek Lite</h4><p>10 Chat DeepSeek</p></div><button class="btn-beli" onclick="beliPaket('DeepSeek Lite (10 Chat)', 3000)">Rp 3.000</button></div>
+        <div class="package-card" style="border-color: var(--accent);"><div class="package-info"><h4>DeepSeek Pro</h4><p>30 Chat DeepSeek</p></div><button class="btn-beli" onclick="beliPaket('DeepSeek Pro (30 Chat)', 8000)">Rp 8.000</button></div>
+        <div class="package-card"><div class="package-info"><h4>DeepSeek Max</h4><p>100 Chat DeepSeek</p></div><button class="btn-beli" onclick="beliPaket('DeepSeek Max (100 Chat)', 20000)">Rp 20.000</button></div>
       </div>
 
-      <!-- TAB CONTENT: GPT -->
       <div class="pricing-content" id="tab-gpt">
-        <div class="package-card">
-          <div class="package-info"><h4>GPT Luna Lite</h4><p>5 Chat GPT-6 Luna</p></div>
-          <button class="btn-beli" onclick="beliPaket('GPT Luna Lite (5 Chat)', 3000)">Rp 3.000</button>
-        </div>
-        <div class="package-card" style="border-color: var(--accent);">
-          <div class="package-info"><h4>GPT Luna Pro</h4><p>15 Chat GPT-6 Luna</p></div>
-          <button class="btn-beli" onclick="beliPaket('GPT Luna Pro (15 Chat)', 8000)">Rp 8.000</button>
-        </div>
-        <div class="package-card">
-          <div class="package-info"><h4>GPT Luna Max</h4><p>50 Chat GPT-6 Luna</p></div>
-          <button class="btn-beli" onclick="beliPaket('GPT Luna Max (50 Chat)', 20000)">Rp 20.000</button>
-        </div>
+        <div class="package-card"><div class="package-info"><h4>GPT Luna Lite</h4><p>5 Chat GPT-6 Luna</p></div><button class="btn-beli" onclick="beliPaket('GPT Luna Lite (5 Chat)', 3000)">Rp 3.000</button></div>
+        <div class="package-card" style="border-color: var(--accent);"><div class="package-info"><h4>GPT Luna Pro</h4><p>15 Chat GPT-6 Luna</p></div><button class="btn-beli" onclick="beliPaket('GPT Luna Pro (15 Chat)', 8000)">Rp 8.000</button></div>
+        <div class="package-card"><div class="package-info"><h4>GPT Luna Max</h4><p>50 Chat GPT-6 Luna</p></div><button class="btn-beli" onclick="beliPaket('GPT Luna Max (50 Chat)', 20000)">Rp 20.000</button></div>
       </div>
 
-      <!-- TAB CONTENT: GLM -->
       <div class="pricing-content" id="tab-glm">
-        <div class="package-card">
-          <div class="package-info"><h4>GLM Flash Lite</h4><p>5 Chat GLM-5.3 Flash</p></div>
-          <button class="btn-beli" onclick="beliPaket('GLM Flash Lite (5 Chat)', 3000)">Rp 3.000</button>
-        </div>
-        <div class="package-card" style="border-color: var(--accent);">
-          <div class="package-info"><h4>GLM Flash Pro</h4><p>15 Chat GLM-5.3 Flash</p></div>
-          <button class="btn-beli" onclick="beliPaket('GLM Flash Pro (15 Chat)', 8000)">Rp 8.000</button>
-        </div>
-        <div class="package-card">
-          <div class="package-info"><h4>GLM Flash Max</h4><p>50 Chat GLM-5.3 Flash</p></div>
-          <button class="btn-beli" onclick="beliPaket('GLM Flash Max (50 Chat)', 20000)">Rp 20.000</button>
-        </div>
+        <div class="package-card"><div class="package-info"><h4>GLM Flash Lite</h4><p>5 Chat GLM-5.3 Flash</p></div><button class="btn-beli" onclick="beliPaket('GLM Flash Lite (5 Chat)', 3000)">Rp 3.000</button></div>
+        <div class="package-card" style="border-color: var(--accent);"><div class="package-info"><h4>GLM Flash Pro</h4><p>15 Chat GLM-5.3 Flash</p></div><button class="btn-beli" onclick="beliPaket('GLM Flash Pro (15 Chat)', 8000)">Rp 8.000</button></div>
+        <div class="package-card"><div class="package-info"><h4>GLM Flash Max</h4><p>50 Chat GLM-5.3 Flash</p></div><button class="btn-beli" onclick="beliPaket('GLM Flash Max (50 Chat)', 20000)">Rp 20.000</button></div>
       </div>
 
-      <!-- TAB CONTENT: COMBO -->
       <div class="pricing-content" id="tab-combo">
-        <div class="package-card">
-          <div class="package-info"><h4>Combo Lite</h4><p>10 DS + 5 GPT + 5 GLM</p></div>
-          <button class="btn-beli combo" onclick="beliPaket('Combo Lite', 7000)">Rp 7.000</button>
-        </div>
-        <div class="package-card" style="border-color: #8b5cf6;">
-          <div class="package-info"><h4>Combo Pro</h4><p>30 DS + 15 GPT + 15 GLM</p></div>
-          <button class="btn-beli combo" onclick="beliPaket('Combo Pro', 18000)">Rp 18.000</button>
-        </div>
-        <div class="package-card">
-          <div class="package-info"><h4>Combo Max</h4><p>100 DS + 50 GPT + 50 GLM</p></div>
-          <button class="btn-beli combo" onclick="beliPaket('Combo Max', 55000)">Rp 55.000</button>
-        </div>
+        <div class="package-card"><div class="package-info"><h4>Combo Lite</h4><p>10 DS + 5 GPT + 5 GLM</p></div><button class="btn-beli combo" onclick="beliPaket('Combo Lite', 7000)">Rp 7.000</button></div>
+        <div class="package-card" style="border-color: #8b5cf6;"><div class="package-info"><h4>Combo Pro</h4><p>30 DS + 15 GPT + 15 GLM</p></div><button class="btn-beli combo" onclick="beliPaket('Combo Pro', 18000)">Rp 18.000</button></div>
+        <div class="package-card"><div class="package-info"><h4>Combo Max</h4><p>100 DS + 50 GPT + 50 GLM</p></div><button class="btn-beli combo" onclick="beliPaket('Combo Max', 55000)">Rp 55.000</button></div>
       </div>
 
     </div>

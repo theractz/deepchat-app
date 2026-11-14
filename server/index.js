@@ -121,7 +121,8 @@ const guestLimiter = rateLimit({
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   try {
-    const { messages, model } = req.body;
+    // 1. Tangkap data persona dan fileContext dari frontend
+    const { messages, model, persona, fileContext } = req.body; 
     const ip = req.ip;
 
     let modelType = 'deepseek';
@@ -139,6 +140,29 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
     }
 
+    // 2. SUSUN PESAN UNTUK VIKEY
+    let finalMessages = [];
+    
+    // Sisipkan Persona
+    if (persona) {
+      finalMessages.push({ 
+        role: "system", 
+        content: `Kamu adalah AI dengan persona: ${persona}. Jawablah sesuai dengan persona tersebut dengan gaya bahasa yang natural.` 
+      });
+    }
+
+    // Sisipkan Konteks File
+    if (fileContext) {
+      finalMessages.push({ 
+        role: "system", 
+        content: `Berikut adalah isi file/dokumen yang diupload user. Baca dan pahami konteks ini untuk menjawab pertanyaan user:\n\n---\n${fileContext}\n---` 
+      });
+    }
+
+    // Gabungkan dengan riwayat chat
+    finalMessages = finalMessages.concat(messages);
+
+    // 3. Tembak Vikey
     const vikeyResponse = await fetch(`${process.env.VIKEY_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: { 
@@ -147,7 +171,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       },
       body: JSON.stringify({ 
         model: model, 
-        messages: messages, 
+        messages: finalMessages, // Pakai array yang udah disusun
         max_tokens: 4000, 
         temperature: 0.7 
       })
