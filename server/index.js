@@ -34,18 +34,16 @@ if (checkCodes.count === 0) {
 }
 
 // ==========================================
-// 2. MIDDLEWARE & STATIC FILES (FIXED PATH)
+// 2. MIDDLEWARE & STATIC FILES
 // ==========================================
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Limit dinaikkan buat file upload
 app.use(cookieParser());
-
-// FIX: Arahkan ke folder public yang sekarang ada di DALAM folder server
 app.use(express.static(path.join(__dirname, 'public')));
-app.set('trust proxy', 1); 
+app.set('trust proxy', 1); // Biar IP kebaca bener di Railway
 
 // ==========================================
-// 3. ROUTING HALAMAN (FIXED PATH)
+// 3. ROUTING HALAMAN
 // ==========================================
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'landing.html'));
@@ -111,17 +109,17 @@ app.post('/api/admin/generate', isAdmin, (req, res) => {
 });
 
 // ==========================================
-// 6. RATE LIMIT & CHAT AI
+// 6. RATE LIMIT & CHAT AI (PERSONA + FILE)
 // ==========================================
 const guestLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, 
-  max: 50, 
+  max: 50, // Max 50 request per hari per IP (biar server gak down)
   message: { error: 'Terlalu banyak request. Coba lagi besok.' }
 });
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   try {
-    // 1. Tangkap data persona dan fileContext dari frontend
+    // Tangkap data dari frontend
     const { messages, model, persona, fileContext } = req.body; 
     const ip = req.ip;
 
@@ -129,6 +127,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     if (model.includes('gpt')) modelType = 'gpt';
     if (model.includes('glm')) modelType = 'glm';
 
+    // Cek limit user di database
     let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
     if (!user) {
       db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
@@ -140,29 +139,29 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
     }
 
-    // 2. SUSUN PESAN UNTUK VIKEY
+    // SUSUN PESAN UNTUK AI
     let finalMessages = [];
     
-    // Sisipkan Persona
-    if (persona) {
+    // 1. Sisipkan Persona kalau ada
+    if (persona && persona.trim() !== "") {
       finalMessages.push({ 
         role: "system", 
-        content: `Kamu adalah AI dengan persona: ${persona}. Jawablah sesuai dengan persona tersebut dengan gaya bahasa yang natural.` 
+        content: `Kamu adalah AI dengan persona: ${persona}. Jawablah sesuai dengan persona tersebut dengan gaya bahasa yang natural dan tidak kaku.` 
       });
     }
 
-    // Sisipkan Konteks File
-    if (fileContext) {
+    // 2. Sisipkan Konteks File kalau ada
+    if (fileContext && fileContext.trim() !== "") {
       finalMessages.push({ 
         role: "system", 
         content: `Berikut adalah isi file/dokumen yang diupload user. Baca dan pahami konteks ini untuk menjawab pertanyaan user:\n\n---\n${fileContext}\n---` 
       });
     }
 
-    // Gabungkan dengan riwayat chat
+    // 3. Gabungkan dengan riwayat chat
     finalMessages = finalMessages.concat(messages);
 
-    // 3. Tembak Vikey
+    // Tembak API Vikey
     const vikeyResponse = await fetch(`${process.env.VIKEY_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: { 
@@ -171,8 +170,8 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       },
       body: JSON.stringify({ 
         model: model, 
-        messages: finalMessages, // Pakai array yang udah disusun
-        max_tokens: 4000, 
+        messages: finalMessages, 
+        max_tokens: 4000, // Dinaikkan biar AI gak kepotong pas mikir
         temperature: 0.7 
       })
     });
@@ -183,6 +182,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       throw new Error(data.error?.message || 'Gagal memanggil API Vikey');
     }
 
+    // Potong limit kalau sukses
     db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - 1 WHERE ip = ?`).run(ip);
     
     res.json({ reply: data.choices[0].message.content });
