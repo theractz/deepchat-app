@@ -2,53 +2,60 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
+  <script>try{var t=localStorage.getItem('deepchat_theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Panel — DeepChat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <style>
-    .admin-container { max-width: 500px; margin: 50px auto; padding: 30px; background: var(--bg-glass-strong); border: 1px solid var(--border-glass); border-radius: var(--radius-lg); backdrop-filter: blur(20px); }
+    html, body { overflow: auto; }
+    .admin-container { max-width: 500px; margin: 40px auto; padding: 30px; background: var(--bg-glass-strong); border: 1px solid var(--border-glass); border-radius: var(--radius-lg); }
+    @media (max-width: 560px) { .admin-container { margin: 0; border-radius: 0; border-left: 0; border-right: 0; min-height: 100dvh; } }
     .header-admin { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
     .header-admin h1 { font-size: 1.5rem; }
-    .btn-logout { background: transparent; color: #ef4444; border: 1px solid #ef4444; padding: 6px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.8rem; }
+    .btn-logout { background: transparent; color: var(--danger); border: 1px solid var(--danger); padding: 8px 14px; min-height: 36px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.8rem; }
     .form-group { margin-bottom: 16px; }
     .form-group label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: var(--text-secondary); }
     .form-group input, .form-group select { width: 100%; padding: 12px; border-radius: var(--radius-sm); background: var(--bg-elevated); border: 1px solid var(--border-glass); color: var(--text-primary); outline: none; font-family: inherit; }
-    .btn-generate { width: 100%; padding: 14px; border-radius: var(--radius-sm); background: var(--accent); color: white; font-weight: 600; border: none; cursor: pointer; margin-top: 10px; }
-    .result-box { margin-top: 20px; padding: 16px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); display: none; text-align: center; }
-    .token-text { font-family: var(--font-mono); font-size: 1.2rem; font-weight: bold; color: white; letter-spacing: 1px; }
+    .btn-generate { width: 100%; padding: 14px; border-radius: var(--radius-sm); background: var(--accent); color: var(--on-accent); font-weight: 600; border: none; cursor: pointer; margin-top: 10px; }
+    .btn-generate:hover { background: var(--accent-hover); }
+    .btn-generate:disabled { opacity: 0.6; cursor: not-allowed; }
+    .result-box { margin-top: 20px; padding: 16px; background: var(--bg-elevated); border: 1px solid var(--success); border-radius: var(--radius-sm); display: none; text-align: center; }
+    .token-text { font-family: var(--font-mono); font-size: 1.2rem; font-weight: bold; color: var(--text-primary); letter-spacing: 1px; word-break: break-all; }
   </style>
 </head>
 <body>
-  <div class="orb orb-1"></div>
   <div class="admin-container">
     <div class="header-admin">
-      <h1>🔐 Admin Panel</h1>
+      <h1>Admin Panel</h1>
       <button class="btn-logout" id="logoutBtn">Logout</button>
     </div>
     
     <div class="form-group">
-      <label>Nama / Prefix Kode (Tanpa Spasi)</label>
+      <label for="tokenPrefix">Nama / Prefix Kode (tanpa spasi)</label>
       <input type="text" id="tokenPrefix" placeholder="Contoh: PROMO-MERDEKA" oninput="this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '')">
     </div>
 
     <div class="form-group">
-      <label>Pilih Model AI</label>
+      <label for="modelTarget">Model AI</label>
       <select id="modelTarget">
-        <option value="deepseek">DeepSeek V4.1</option>
+        <option value="deepseek">DeepSeek (V4 Flash, V4 Pro, V4.1 Flash)</option>
         <option value="gpt">GPT-6 Luna</option>
         <option value="glm">GLM-5.3 Flash</option>
       </select>
     </div>
 
     <div class="form-group">
-      <label>Jumlah Limit (Chat)</label>
+      <label for="tokenAmount">Jumlah limit (chat)</label>
       <input type="number" id="tokenAmount" value="50" min="1">
     </div>
 
     <button class="btn-generate" id="generateBtn">Generate Kode Voucher</button>
 
     <div class="result-box" id="resultBox">
-      <h3 style="color:#22c55e; margin-bottom:8px;">✅ Berhasil Dibuat!</h3>
+      <h3 style="color:var(--success); margin-bottom:8px;">Kode berhasil dibuat</h3>
       <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Kirim kode ini ke pembeli:</p>
       <div class="token-text" id="resultToken"></div>
     </div>

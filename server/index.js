@@ -34,6 +34,43 @@ if (checkCodes.count === 0) {
 }
 
 // ==========================================
+// DAFTAR MODEL YANG BOLEH DIPAKAI (WHITELIST)
+// type = jenis limit yang dipotong, cost = kredit per chat
+// ==========================================
+// Batas skill yang dikirim dari browser (jaga biaya token & mencegah prompt raksasa)
+const MAX_SKILLS = 3;
+const MAX_SKILL_CHARS = 6000;
+const MAX_SKILL_TOTAL = 12000;
+
+function buildSkillsPrompt(skills) {
+  if (!Array.isArray(skills)) return '';
+  let total = 0;
+  const parts = [];
+  for (const s of skills.slice(0, MAX_SKILLS)) {
+    if (!s || typeof s.instructions !== 'string') continue;
+    const body = s.instructions.trim().slice(0, MAX_SKILL_CHARS);
+    if (!body || total + body.length > MAX_SKILL_TOTAL) continue;
+    total += body.length;
+    const name = String(s.name || 'Skill').slice(0, 60);
+    const desc = String(s.description || '').slice(0, 200);
+    parts.push(`### Skill: ${name}\n${desc ? `Kapan dipakai: ${desc}\n` : ''}${body}`);
+  }
+  if (parts.length === 0) return '';
+  return `SKILL AKTIF:
+Gunakan skill di bawah hanya jika relevan dengan permintaan user. Jika instruksi skill meminta format atau panjang jawaban tertentu, ikuti skill meskipun berbeda dari aturan gaya singkat di atas.
+
+${parts.join('\n\n')}`;
+}
+
+const ALLOWED_MODELS = {
+  'deepseek/deepseek-v4-flash':   { type: 'deepseek', cost: 1 },
+  'deepseek/deepseek-v4-pro':     { type: 'deepseek', cost: 1 },
+  'deepseek/deepseek-v4.1-flash': { type: 'deepseek', cost: 1 },
+  'gpt/gpt-6-luna':               { type: 'gpt',      cost: 1 },
+  'glm/glm-5.3-flash':            { type: 'glm',      cost: 1 },
+};
+
+// ==========================================
 // 2. MIDDLEWARE & STATIC FILES
 // ==========================================
 app.use(cors());
@@ -119,12 +156,18 @@ const guestLimiter = rateLimit({
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   try {
-    const { messages, model, persona, fileContext } = req.body; 
+    const { messages, model, persona, fileContext, skills } = req.body; 
     const ip = req.ip;
 
-    let modelType = 'deepseek';
-    if (model.includes('gpt')) modelType = 'gpt';
-    if (model.includes('glm')) modelType = 'glm';
+    const modelConfig = ALLOWED_MODELS[model];
+    if (!modelConfig) {
+      return res.status(400).json({ error: 'Model tidak tersedia.' });
+    }
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Pesan kosong.' });
+    }
+    const modelType = modelConfig.type;
+    const cost = modelConfig.cost;
 
     let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
     if (!user) {
@@ -133,7 +176,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     }
 
     const currentLimit = user[`${modelType}_limit`];
-    if (currentLimit <= 0) {
+    if (currentLimit < cost) {
       return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
     }
 
@@ -159,6 +202,12 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       5. Jika user meminta kodingan, berikan kodenya saja tanpa perlu menjelaskan panjang lebar (kecuali diminta).
       6. Gunakan format bullet points jika memberikan daftar. Jangan pernah mengulang pertanyaan user di awal jawaban.`
     });
+
+    // 2b. Skill yang dipasang user
+    const skillsPrompt = buildSkillsPrompt(skills);
+    if (skillsPrompt) {
+      finalMessages.push({ role: "system", content: skillsPrompt });
+    }
 
     // 3. Konteks File
     if (fileContext && fileContext.trim() !== "") {
@@ -193,7 +242,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     }
 
     // Potong limit kalau sukses
-    db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - 1 WHERE ip = ?`).run(ip);
+    db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
     
     res.json({ reply: data.choices[0].message.content });
 
@@ -222,16 +271,23 @@ app.post('/api/redeem', (req, res) => {
     const ip = req.ip;
     if (!code) return res.status(400).json({ error: 'Kode wajib diisi.' });
 
-    const upperCode = code.toUpperCase();
-    const voucher = db.prepare('SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0').get(upperCode);
-    
+    const upperCode = String(code).toUpperCase();
+
+    const redeemTx = db.transaction(() => {
+      // Tandai terpakai dulu; kalau 0 baris berubah berarti kode salah / sudah dipakai
+      const mark = db.prepare('UPDATE redeem_codes SET is_used = 1 WHERE code = ? AND is_used = 0').run(upperCode);
+      if (mark.changes === 0) return null;
+
+      const voucher = db.prepare('SELECT * FROM redeem_codes WHERE code = ?').get(upperCode);
+      db.prepare('INSERT OR IGNORE INTO users (ip) VALUES (?)').run(ip);
+      db.prepare(`UPDATE users SET deepseek_limit = deepseek_limit + ?, gpt_limit = gpt_limit + ?, glm_limit = glm_limit + ? WHERE ip = ?`)
+        .run(voucher.deepseek_amount, voucher.gpt_amount, voucher.glm_amount, ip);
+      return voucher;
+    });
+
+    const voucher = redeemTx();
     if (!voucher) return res.status(400).json({ error: 'Kode tidak valid atau sudah dipakai.' });
 
-    db.prepare(`UPDATE users SET deepseek_limit = deepseek_limit + ?, gpt_limit = gpt_limit + ?, glm_limit = glm_limit + ? WHERE ip = ?`)
-      .run(voucher.deepseek_amount, voucher.gpt_amount, voucher.glm_amount, ip);
-
-    db.prepare('UPDATE redeem_codes SET is_used = 1 WHERE code = ?').run(upperCode);
-    
     res.json({ message: 'Kode berhasil!', added: { deepseek: voucher.deepseek_amount, gpt: voucher.gpt_amount, glm: voucher.glm_amount } });
   } catch (error) {
     console.error('Redeem Error:', error);
