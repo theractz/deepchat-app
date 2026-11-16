@@ -404,3 +404,36 @@ main > .composer { width: calc(100% - 32px); }
   border: 1px solid var(--border-glass); outline: none; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.5; resize: vertical;
 }
 .skill-add textarea:focus { border-color: var(--accent); }
+
+/* ---------- Menu Pengaturan AI (floating card) ---------- */
+.settings-menu-wrap { position: relative; display: flex; }
+.settings-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; min-width: 210px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px; border-radius: var(--radius-md); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+.settings-menu[hidden] { display: none; }
+.settings-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px; padding: 8px 12px;
+  border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-primary);
+  font: inherit; font-size: 0.9rem; text-align: left; cursor: pointer;
+}
+.settings-item:hover, .settings-item:focus-visible { background: var(--bg-elevated); }
+.settings-item svg { color: var(--text-secondary); flex-shrink: 0; }
+.settings-item .btn-badge { position: static; margin-left: auto; }
+
+/* ---------- File terlampir ---------- */
+.file-chip {
+  display: flex; align-items: center; gap: 10px; margin-top: 4px; padding: 8px 8px 8px 12px;
+  background: var(--bg-elevated); border: 1px solid var(--border-glass); border-radius: var(--radius-md); font-size: 0.85rem;
+}
+.file-chip[hidden] { display: none; }
+.file-chip > svg { flex-shrink: 0; color: var(--text-secondary); }
+.file-chip-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.file-chip-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip-meta { font-size: 0.75rem; color: var(--text-muted); }
+.file-chip .icon-btn { width: 28px; height: 28px; flex-shrink: 0; }
+.msg-file {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin-bottom: 6px; padding: 3px 8px;
+  font-size: 0.8rem; color: var(--text-secondary); background: var(--bg-base); border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
+}
+.msg-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

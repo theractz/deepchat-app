@@ -1,6 +1,7 @@
 const state = {
   credits: { deepseek: 0, gpt: 0, glm: 0 },
   creditsLoaded: false,
+  attachedFile: null, // { name, size, text, truncated, announced }
   currentModelType: 'deepseek',
   model: 'deepseek/deepseek-v4-flash',
   isTyping: false,
@@ -25,7 +26,6 @@ const DEFAULT_MODEL_ID = 'deepseek/deepseek-v4-flash';
 const modelById = (id) => MODELS.find(m => m.id === id) || MODELS.find(m => m.id === DEFAULT_MODEL_ID);
 const ARCH_LOGO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="currentColor"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>';
 
-let uploadedFileContext = "";
 
 // ==========================================
 // 1. MANAJEMEN LIMIT & MODEL
@@ -151,25 +151,36 @@ if (picker) {
 // ==========================================
 // 2. MODAL SETTINGS & PERSONA
 // ==========================================
-const settingsModal = document.getElementById('settingsModal');
+const personaModal = document.getElementById('personaModal');
 const personaInput = document.getElementById('personaInput');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsMenu = document.getElementById('settingsMenu');
 
 if (personaInput) personaInput.value = state.persona;
 
-document.getElementById('settingsBtn')?.addEventListener('click', () => {
+// Floating card: satu tombol gear, isinya Persona dan Skill (masing-masing halaman/modal sendiri)
+function setSettingsMenu(open) {
+  if (!settingsMenu || !settingsBtn) return;
+  settingsMenu.hidden = !open;
+  settingsBtn.setAttribute('aria-expanded', String(open));
+  if (open) settingsMenu.querySelector('.settings-item')?.focus();
+}
+settingsBtn?.addEventListener('click', (e) => { e.stopPropagation(); setSettingsMenu(settingsMenu.hidden); });
+document.addEventListener('click', (e) => {
+  if (settingsMenu && !settingsMenu.hidden && !settingsMenu.contains(e.target)) setSettingsMenu(false);
+});
+
+document.getElementById('openPersonaBtn')?.addEventListener('click', () => {
+  setSettingsMenu(false);
   personaInput.value = state.persona;
-  settingsModal.classList.add('active');
+  personaModal.classList.add('active');
 });
-
-document.getElementById('closeSettingsBtn')?.addEventListener('click', () => {
-  settingsModal.classList.remove('active');
-});
-
-document.getElementById('saveSettingsBtn')?.addEventListener('click', () => {
+document.getElementById('closePersonaBtn')?.addEventListener('click', () => personaModal.classList.remove('active'));
+document.getElementById('savePersonaBtn')?.addEventListener('click', () => {
   state.persona = personaInput.value.trim();
-  localStorage.setItem('deepchat_persona', state.persona);
+  try { localStorage.setItem('deepchat_persona', state.persona); } catch (e) {}
   alert('Persona berhasil disimpan!');
-  settingsModal.classList.remove('active');
+  personaModal.classList.remove('active');
 });
 
 // ==========================================
@@ -201,30 +212,69 @@ document.getElementById('confirmRedeem').addEventListener('click', async () => {
 // ==========================================
 // 4. FITUR UPLOAD FILE
 // ==========================================
+const MAX_FILE_BYTES = 2 * 1024 * 1024; // batas ukuran file
+const MAX_FILE_CHARS = 40000;               // batas isi yang dikirim ke AI (samakan dengan server)
+const TEXT_EXTS = new Set(['txt','md','markdown','js','mjs','cjs','ts','jsx','tsx','json','html','htm','css','scss','py','csv','tsv','xml','yml','yaml','log','sql','java','c','h','cpp','cs','go','rs','php','rb','sh','ini','toml','svg']);
+
+const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const FILE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>';
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Chip "file terlampir" di atas kotak chat. File tetap terlampir sampai dihapus / chat baru.
+function renderFileChip() {
+  const chip = document.getElementById('fileChip');
+  if (!chip) return;
+  const f = state.attachedFile;
+  if (!f) { chip.hidden = true; chip.innerHTML = ''; return; }
+  const meta = `${formatBytes(f.size)}${f.truncated ? ` · hanya ${MAX_FILE_CHARS.toLocaleString('id-ID')} karakter pertama yang dibaca AI` : ''}`;
+  chip.hidden = false;
+  chip.innerHTML = `${FILE_ICON}
+    <div class="file-chip-info"><span class="file-chip-name">${escHtml(f.name)}</span><span class="file-chip-meta">${escHtml(meta)}</span></div>
+    <button type="button" class="icon-btn" id="removeFileBtn" aria-label="Hapus file terlampir">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>`;
+  document.getElementById('removeFileBtn').addEventListener('click', clearAttachedFile);
+}
+
+function clearAttachedFile() {
+  state.attachedFile = null;
+  renderFileChip();
+}
+
 window.handleFileUpload = function(event) {
-  const file = event.target.files[0];
+  const input = event.target;
+  const file = input.files[0];
+  input.value = ''; // supaya file yang sama bisa dipilih ulang
   if (!file) return;
 
-  if (file.size > 2 * 1024 * 1024) {
-    alert('File terlalu besar. Maksimal 2MB.');
-    event.target.value = '';
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (!TEXT_EXTS.has(ext)) {
+    alert('Format file ini belum didukung. Yang bisa: file teks/kode seperti .txt, .md, .json, .csv, .js, .py, .html, .css, dll. (PDF dan Word belum bisa dibaca.)');
+    return;
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    alert('File terlalu besar. Maksimal 2 MB.');
     return;
   }
 
   const reader = new FileReader();
-  reader.onload = function(e) {
-    uploadedFileContext = e.target.result; 
-    const inputEl = document.getElementById('input');
-    inputEl.placeholder = `File "${file.name}" siap ditanya...`;
-    inputEl.style.color = '#22c55e'; 
-    setTimeout(() => {
-      inputEl.placeholder = 'Ketik pesan...';
-      inputEl.style.color = 'var(--text-primary)';
-    }, 3000);
+  reader.onload = () => {
+    let text = String(reader.result || '');
+    if (text.includes('\u0000')) { alert('File ini bukan file teks yang bisa dibaca.'); return; }
+    if (!text.trim()) { alert('File kosong.'); return; }
+    const truncated = text.length > MAX_FILE_CHARS;
+    if (truncated) text = text.slice(0, MAX_FILE_CHARS);
+    state.attachedFile = { name: file.name, size: file.size, text, truncated, announced: false };
+    renderFileChip();
+    document.getElementById('input')?.focus();
   };
-  
-  reader.readAsText(file); 
-  event.target.value = ''; 
+  reader.onerror = () => alert('Gagal membaca file.');
+  reader.readAsText(file);
 };
 
 // ==========================================
@@ -283,7 +333,7 @@ function formatMessage(text) {
 // ==========================================
 // 6. CHAT LOGIC & HISTORY
 // ==========================================
-function addMessage(role, content, saveToHistory = true, modelId = null) {
+function addMessage(role, content, saveToHistory = true, modelId = null, fileName = null) {
   const welcome = document.getElementById('welcome');
   if (welcome) welcome.style.display = 'none';
 
@@ -298,7 +348,7 @@ function addMessage(role, content, saveToHistory = true, modelId = null) {
     <div class="msg-avatar" style="${role === 'ai' ? `--model-color:${modelById(modelId || state.model).color}` : ''}">
       ${role === 'user' ? userLogo : archLogo}
     </div>
-    <div class="msg-content">${role === 'ai' ? formatMessage(content) : content}</div>
+    <div class="msg-content">${role === 'ai' ? formatMessage(content) : (fileName ? `<div class="msg-file">${FILE_ICON}<span>${escHtml(fileName)}</span></div><br>` : '') + content}</div>
   `;
   
   if (role === 'ai') {
@@ -313,7 +363,7 @@ function addMessage(role, content, saveToHistory = true, modelId = null) {
   
   document.getElementById('messages').appendChild(msgDiv);
   document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
-  state.messages.push(role === 'ai' ? { role, content, model: modelId || state.model } : { role, content });
+  state.messages.push(role === 'ai' ? { role, content, model: modelId || state.model } : (fileName ? { role, content, file: fileName } : { role, content }));
 
   if (saveToHistory) saveChatToLocal();
 }
@@ -354,7 +404,8 @@ function loadChat(id) {
   state.currentChatId = id;
   state.messages = [];
   document.getElementById('messages').innerHTML = '';
-  chat.messages.forEach(msg => addMessage(msg.role, msg.content, false, msg.model));
+  clearAttachedFile(); // jangan bawa file dari chat lain
+  chat.messages.forEach(msg => addMessage(msg.role, msg.content, false, msg.model, msg.file));
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('active');
 }
@@ -365,7 +416,10 @@ async function sendMessage() {
   const isFree = modelById(state.model).free;
   if (!text || state.isTyping || (!isFree && state.credits[state.currentModelType] <= 0)) return;
 
-  addMessage('user', text);
+  const af = state.attachedFile;
+  const announceName = af && !af.announced ? af.name : null; // tampilkan lampiran di bubble hanya pada pesan pertama
+  if (af) af.announced = true;
+  addMessage('user', text, true, null, announceName);
   input.value = ''; input.style.height = 'auto';
   
   state.isTyping = true;
@@ -388,7 +442,8 @@ async function sendMessage() {
         messages: cleanMessages, 
         model: state.model,
         persona: persona,
-        fileContext: uploadedFileContext,
+        fileContext: af ? af.text : '',
+        fileName: af ? af.name : '',
         skills: activeSkills()
       })
     });
@@ -462,7 +517,6 @@ async function sendMessage() {
     });
 
     await fetchCredits(); 
-    uploadedFileContext = ""; 
 
   } catch (err) {
     document.getElementById('typingIndicator').classList.remove('active');
@@ -500,6 +554,7 @@ document.getElementById('overlay').addEventListener('click', () => {
 document.getElementById('newChatBtn').addEventListener('click', () => {
   state.currentChatId = null;
   state.messages = [];
+  clearAttachedFile();
   document.getElementById('messages').innerHTML = `
     <div class="welcome" id="welcome">
       <div class="welcome-icon glass">
@@ -555,7 +610,10 @@ document.querySelectorAll('.modal').forEach(m => {
   m.addEventListener('click', (e) => { if (e.target === m) m.classList.remove('active'); });
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
+    if (settingsMenu && !settingsMenu.hidden) { setSettingsMenu(false); settingsBtn.focus(); }
+  }
 });
 
 // ==========================================
@@ -565,6 +623,7 @@ const MAX_ENABLED_SKILLS = 3;
 const MAX_STORED_SKILLS = 10;
 const MAX_SKILL_CHARS = 6000;
 const skillsModal = document.getElementById('skillsModal');
+const skillsEnabledHere = !!skillsModal; // hanya halaman yang punya menu Skill
 
 function loadSkills() {
   try {
@@ -582,7 +641,7 @@ function persistSkills() {
 
 // Hanya skill aktif yang dikirim ke server (dan hanya di halaman yang punya menu Skill)
 function activeSkills() {
-  if (!skillsModal) return [];
+  if (!skillsEnabledHere) return [];
   return state.skills
     .filter(s => s.enabled)
     .slice(0, MAX_ENABLED_SKILLS)
@@ -617,9 +676,8 @@ function parseSkillText(text, fileName) {
 
 function renderSkills() {
   const list = document.getElementById('skillList');
-  const badge = document.getElementById('skillsBadge');
   const enabledCount = state.skills.filter(s => s.enabled).length;
-  if (badge) { badge.textContent = enabledCount; badge.hidden = enabledCount === 0; }
+  document.querySelectorAll('[data-skill-badge]').forEach(b => { b.textContent = enabledCount; b.hidden = enabledCount === 0; });
   if (!list) return;
 
   list.innerHTML = '';
@@ -680,8 +738,8 @@ function renderSkills() {
   });
 }
 
-if (skillsModal) {
-  document.getElementById('skillsBtn')?.addEventListener('click', () => { renderSkills(); skillsModal.classList.add('active'); });
+if (skillsEnabledHere) {
+  document.getElementById('openSkillsBtn')?.addEventListener('click', () => { setSettingsMenu(false); renderSkills(); skillsModal.classList.add('active'); });
   document.getElementById('closeSkillsBtn')?.addEventListener('click', () => skillsModal.classList.remove('active'));
 
   document.getElementById('skillFile').addEventListener('change', (e) => {

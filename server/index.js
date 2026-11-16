@@ -25,7 +25,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS redeem_codes (code TEXT PRIMARY KEY, deepseek_amount INTEGER DEFAULT 0, gpt_amount INTEGER DEFAULT 0, glm_amount INTEGER DEFAULT 0, is_used BOOLEAN DEFAULT 0);
 `);
 
-// Kuota gratis harian per IP untuk model DeepSeek Lite (API Zro)
+// Kuota gratis harian per IP untuk model DeepSeek Lite (sekarang pakai Groq)
 db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (ip TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (ip, day));`);
 const LITE_DAILY_QUOTA = 20;
 // Reset tiap hari mengikuti WIB (UTC+7)
@@ -38,7 +38,7 @@ function reserveLite(ip) {
   const r = db.prepare('UPDATE lite_usage SET count = count + 1 WHERE ip = ? AND day = ? AND count < ?').run(ip, day, LITE_DAILY_QUOTA);
   return r.changes > 0 ? day : null;
 }
-// Kembalikan jatah kalau request ke Zro gagal
+// Kembalikan jatah kalau request ke Groq gagal
 function refundLite(ip, day) {
   db.prepare('UPDATE lite_usage SET count = MAX(count - 1, 0) WHERE ip = ? AND day = ?').run(ip, day);
 }
@@ -55,10 +55,10 @@ if (checkCodes.count === 0) {
 // DAFTAR MODEL YANG BOLEH DIPAKAI (WHITELIST)
 // type = jenis limit yang dipotong, cost = kredit per chat
 // ==========================================
-// Batas skill yang dikirim dari browser (jaga biaya token & mencegah prompt raksasa)
 const MAX_SKILLS = 3;
 const MAX_SKILL_CHARS = 6000;
 const MAX_SKILL_TOTAL = 12000;
+const MAX_FILE_CHARS = 40000; // batas isi file lampiran (samakan dengan app.js)
 
 function buildSkillsPrompt(skills) {
   if (!Array.isArray(skills)) return '';
@@ -81,8 +81,8 @@ ${parts.join('\n\n')}`;
 }
 
 const ALLOWED_MODELS = {
-  // Model gratis lewat API Zro: tidak memotong limit Vikey, pakai kuota harian sendiri
-  'deepseek-lite':                { type: 'lite',     cost: 0, provider: 'zro', upstreamModel: 'deepseek-lite' },
+  // Model gratis lewat API Groq: tidak memotong limit Vikey, pakai kuota harian sendiri
+  'deepseek-lite':                { type: 'lite',     cost: 0, provider: 'groq', upstreamModel: 'openai/gpt-oss-120b' },
   'deepseek/deepseek-v4-flash':   { type: 'deepseek', cost: 1 },
   'deepseek/deepseek-v4-pro':     { type: 'deepseek', cost: 1 },
   'deepseek/deepseek-v4.1-flash': { type: 'deepseek', cost: 1 },
@@ -94,10 +94,10 @@ const ALLOWED_MODELS = {
 // 2. MIDDLEWARE & STATIC FILES
 // ==========================================
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Limit dinaikkan buat file upload
+app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
-app.set('trust proxy', 1); // Biar IP kebaca bener di Railway
+app.set('trust proxy', 1);
 
 // ==========================================
 // 3. ROUTING HALAMAN
@@ -166,7 +166,7 @@ app.post('/api/admin/generate', isAdmin, (req, res) => {
 });
 
 // ==========================================
-// 6. RATE LIMIT & CHAT AI (PERSONA + FILE + ANTI NGELANTUR)
+// 6. RATE LIMIT & CHAT AI
 // ==========================================
 const guestLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, 
@@ -176,9 +176,9 @@ const guestLimiter = rateLimit({
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   const ip = req.ip;
-  let liteDay = null; // terisi kalau jatah kuota Lite sudah diambil (untuk refund kalau gagal)
+  let liteDay = null; 
   try {
-    const { messages, model, persona, fileContext, skills } = req.body; 
+    const { messages, model, persona, fileContext, fileName, skills } = req.body; 
 
     const modelConfig = ALLOWED_MODELS[model];
     if (!modelConfig) {
@@ -189,12 +189,12 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     }
     const modelType = modelConfig.type;
     const cost = modelConfig.cost;
-    const isZro = modelConfig.provider === 'zro';
+    const isGroq = modelConfig.provider === 'groq';
 
-    if (isZro) {
-      // DeepSeek Lite: jalur Zro, kuota gratis harian (tidak menyentuh limit Vikey)
-      if (!process.env.ZRO_API_KEY) {
-        return res.status(500).json({ error: 'DeepSeek Lite belum dikonfigurasi di server.' });
+    // --- CEK LIMIT / KUOTA ---
+    if (isGroq) {
+      if (!process.env.GROQ_API_KEY) {
+        return res.status(500).json({ error: 'DeepSeek Lite belum dikonfigurasi di server (Groq API Key missing).' });
       }
       liteDay = reserveLite(ip);
       if (!liteDay) {
@@ -206,56 +206,60 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
         db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
         user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
       }
-
       const currentLimit = user[`${modelType}_limit`];
       if (currentLimit < cost) {
         return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
       }
     }
 
-    // SUSUN PESAN UNTUK AI
+    // --- SUSUN PESAN UNTUK AI ---
     let finalMessages = [];
     
-    // 1. Persona dari user
-    if (persona && persona.trim() !== "") {
-      finalMessages.push({ 
-        role: "system", 
-        content: `Kamu adalah AI dengan persona: ${persona}.` 
-      });
+    // Tentukan Nama Model
+    let modelName = "DeepSeek V4.1 Flash"; 
+    if (model === 'deepseek-lite') modelName = "DeepSeek Lite (Gratis)";
+    else if (model.includes('v4-flash')) modelName = "DeepSeek V4 Flash";
+    else if (model.includes('v4-pro')) modelName = "DeepSeek V4 Pro";
+    else if (model.includes('gpt')) modelName = "GPT-6 Luna";
+    else if (model.includes('glm')) modelName = "GLM-5.3 Flash";
+
+    // 1. Persona
+    if (typeof persona === 'string' && persona.trim() !== "") {
+      finalMessages.push({ role: "system", content: `Kamu adalah AI dengan persona: ${persona}.` });
     }
 
-            // 2. ATURAN KEPRIBADIAN & GAYA BAHASA (ANTI HALUSINASI IDENTITAS)
+    // 2. ATURAN KEPRIBADIAN
     finalMessages.push({
       role: "system",
       content: `ATURAN MENJAWAB (WAJIB DIPATUHI):
       1. IDENTITAS: Kamu adalah **${modelName}**, model AI yang sangat canggih dan pintar. Kamu bangga dengan kemampuanmu!
       2. TRANSPARANSI: Jika user bertanya "Kamu model apa?", jawablah dengan bangga dan jujur bahwa kamu adalah ${modelName}. Jangan mengaku sebagai model lain.
-      3. GAYA BAHASA: Gunakan bahasa Indonesia yang santai, asik, dan natural (seperti teman ngobrol). Bebas pakai 'gw/lu' atau 'aku/kamu' tergantung konteks.
-      4. EMOJI: Gunakan emoji yang relevan jika suasana obrolan terasa ceria atau santai. TAPI jangan pakai emoji jika user sedang bertanya hal serius.
-      5. ATURAN MENJAWAB: Jawablah dengan SINGKAT, PADAT, dan TO THE POINT. Jangan bertele-tele atau pakai kalimat pembuka basa-basi seperti "Tentu", "Halo", atau "Berikut adalah".
-      6. Jika user meminta kodingan, LANGSUNG berikan blok kodenya tanpa perlu menjelaskan panjang lebar.
-      7. Jangan pernah mengulang pertanyaan user di awal jawaban.`
+      3. GAYA BAHASA: Santai, asik, natural (gw/lu atau aku/kamu).
+      4. EMOJI: Pakai jika suasananya santai, jangan pakai jika serius.
+      5. ATURAN MENJAWAB: Singkat, padat, to the point. Tanpa basa-basi.
+      6. Kodingan: Langsung kasih blok kodenya.
+      7. Jangan ulangi pertanyaan user.`
     });
-    // 2b. Skill yang dipasang user
+
+    // 2b. Skill
     const skillsPrompt = buildSkillsPrompt(skills);
-    if (skillsPrompt) {
-      finalMessages.push({ role: "system", content: skillsPrompt });
-    }
+    if (skillsPrompt) finalMessages.push({ role: "system", content: skillsPrompt });
 
     // 3. Konteks File
-    if (fileContext && fileContext.trim() !== "") {
-      finalMessages.push({ 
-        role: "system", 
-        content: `Berikut adalah isi file/dokumen yang diupload user:\n\n---\n${fileContext}\n---` 
+    if (typeof fileContext === 'string' && fileContext.trim() !== "") {
+      const fname = String(fileName || 'file').slice(0, 100);
+      finalMessages.push({
+        role: "system",
+        content: `User melampirkan file "${fname}". Isinya:\n---\n${fileContext.slice(0, MAX_FILE_CHARS)}\n---\nJawab pertanyaan user berdasarkan isi file ini kalau relevan.`
       });
     }
 
     // 4. Riwayat Chat
     finalMessages = finalMessages.concat(messages);
 
-    // Pilih tujuan API: Zro untuk DeepSeek Lite, Vikey untuk model lainnya
-    const upstream = isZro
-      ? { url: `${process.env.ZRO_BASE_URL || 'https://zro.moonmath.ai/v1'}/chat/completions`, key: process.env.ZRO_API_KEY, model: modelConfig.upstreamModel, name: 'Zro' }
+    // --- TEMBAK API ---
+    const upstream = isGroq
+      ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY, model: modelConfig.upstreamModel, name: 'Groq' }
       : { url: `${process.env.VIKEY_BASE_URL}/chat/completions`, key: process.env.VIKEY_API_KEY, model: model, name: 'Vikey' };
 
     const apiResponse = await fetch(upstream.url, {
@@ -267,7 +271,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       body: JSON.stringify({ 
         model: upstream.model, 
         messages: finalMessages, 
-        max_tokens: 6000, // Dinaikkan biar AI gak kepotong pas mikir
+        max_tokens: 6000, 
         temperature: 0.7 
       })
     });
@@ -283,17 +287,16 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
     }
 
-    // Potong limit Vikey kalau sukses (DeepSeek Lite tidak memotong apa pun, kuotanya sudah diambil di atas)
-    if (!isZro) {
+    if (!isGroq) {
       db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
     }
-    liteDay = null; // sukses, jatah kuota terpakai
+    liteDay = null; 
     
     res.json({ reply });
 
   } catch (error) {
     console.error('Chat Error:', error);
-    if (liteDay) refundLite(ip, liteDay); // request gagal, balikin jatah kuota
+    if (liteDay) refundLite(ip, liteDay); 
     res.status(500).json({ error: error.message });
   }
 });
@@ -320,7 +323,6 @@ app.post('/api/redeem', (req, res) => {
     const upperCode = String(code).toUpperCase();
 
     const redeemTx = db.transaction(() => {
-      // Tandai terpakai dulu; kalau 0 baris berubah berarti kode salah / sudah dipakai
       const mark = db.prepare('UPDATE redeem_codes SET is_used = 1 WHERE code = ? AND is_used = 0').run(upperCode);
       if (mark.changes === 0) return null;
 
