@@ -25,6 +25,24 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS redeem_codes (code TEXT PRIMARY KEY, deepseek_amount INTEGER DEFAULT 0, gpt_amount INTEGER DEFAULT 0, glm_amount INTEGER DEFAULT 0, is_used BOOLEAN DEFAULT 0);
 `);
 
+// Kuota gratis harian per IP untuk model DeepSeek Lite (API Zro)
+db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (ip TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (ip, day));`);
+const LITE_DAILY_QUOTA = 20;
+// Reset tiap hari mengikuti WIB (UTC+7)
+const todayWIB = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
+// Ambil 1 jatah kuota. Return string hari kalau berhasil, null kalau kuota habis.
+function reserveLite(ip) {
+  const day = todayWIB();
+  db.prepare('INSERT OR IGNORE INTO lite_usage (ip, day, count) VALUES (?, ?, 0)').run(ip, day);
+  const r = db.prepare('UPDATE lite_usage SET count = count + 1 WHERE ip = ? AND day = ? AND count < ?').run(ip, day, LITE_DAILY_QUOTA);
+  return r.changes > 0 ? day : null;
+}
+// Kembalikan jatah kalau request ke Zro gagal
+function refundLite(ip, day) {
+  db.prepare('UPDATE lite_usage SET count = MAX(count - 1, 0) WHERE ip = ? AND day = ?').run(ip, day);
+}
+
 // Bikin kode default kalau database masih kosong
 const checkCodes = db.prepare('SELECT COUNT(*) as count FROM redeem_codes').get();
 if (checkCodes.count === 0) {
@@ -63,6 +81,8 @@ ${parts.join('\n\n')}`;
 }
 
 const ALLOWED_MODELS = {
+  // Model gratis lewat API Zro: tidak memotong limit Vikey, pakai kuota harian sendiri
+  'deepseek-lite':                { type: 'lite',     cost: 0, provider: 'zro', upstreamModel: 'deepseek-lite' },
   'deepseek/deepseek-v4-flash':   { type: 'deepseek', cost: 1 },
   'deepseek/deepseek-v4-pro':     { type: 'deepseek', cost: 1 },
   'deepseek/deepseek-v4.1-flash': { type: 'deepseek', cost: 1 },
@@ -155,9 +175,10 @@ const guestLimiter = rateLimit({
 });
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
+  const ip = req.ip;
+  let liteDay = null; // terisi kalau jatah kuota Lite sudah diambil (untuk refund kalau gagal)
   try {
     const { messages, model, persona, fileContext, skills } = req.body; 
-    const ip = req.ip;
 
     const modelConfig = ALLOWED_MODELS[model];
     if (!modelConfig) {
@@ -168,16 +189,28 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     }
     const modelType = modelConfig.type;
     const cost = modelConfig.cost;
+    const isZro = modelConfig.provider === 'zro';
 
-    let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
-    if (!user) {
-      db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
-      user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
-    }
+    if (isZro) {
+      // DeepSeek Lite: jalur Zro, kuota gratis harian (tidak menyentuh limit Vikey)
+      if (!process.env.ZRO_API_KEY) {
+        return res.status(500).json({ error: 'DeepSeek Lite belum dikonfigurasi di server.' });
+      }
+      liteDay = reserveLite(ip);
+      if (!liteDay) {
+        return res.status(403).json({ error: `Kuota gratis DeepSeek Lite hari ini habis (${LITE_DAILY_QUOTA}/hari). Coba lagi besok atau pakai model lain.` });
+      }
+    } else {
+      let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
+      if (!user) {
+        db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
+        user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
+      }
 
-    const currentLimit = user[`${modelType}_limit`];
-    if (currentLimit < cost) {
-      return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
+      const currentLimit = user[`${modelType}_limit`];
+      if (currentLimit < cost) {
+        return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
+      }
     }
 
     // SUSUN PESAN UNTUK AI
@@ -191,16 +224,17 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
       });
     }
 
-        // 2. ATURAN KEPRIBADIAN & GAYA BAHASA (RAMAH & EMOSIONAL)
+            // 2. ATURAN KEPRIBADIAN & GAYA BAHASA (ANTI HALUSINASI IDENTITAS)
     finalMessages.push({
       role: "system",
-      content: `ATURAN MENJAWAB:
-      1. Kamu adalah teman ngobrol yang asik, ramah, dan empatik. Gunakan bahasa yang santai dan natural (seperti pakai 'gw/lu' atau 'aku/kamu').
-      2. Jawablah dengan SINGKAT, PADAT, dan TO THE POINT. Jangan bertele-tele.
-      3. Gunakan emoji yang relevan jika pertanyaan atau suasana obrolan terasa ceria, lucu, atau santai. TAPI jangan pakai emoji jika user sedang bertanya serius (seperti coding atau masalah teknis).
-      4. Jika user hanya menyapa atau bertanya hal simpel, jawab maksimal 2-3 kalimat dengan nada bersahabat.
-      5. Jika user meminta kodingan, berikan kodenya saja tanpa perlu menjelaskan panjang lebar (kecuali diminta).
-      6. Gunakan format bullet points jika memberikan daftar. Jangan pernah mengulang pertanyaan user di awal jawaban.`
+      content: `ATURAN MENJAWAB (WAJIB DIPATUHI):
+      1. IDENTITAS: Kamu adalah "DeepChat", asisten AI pintar yang dikembangkan khusus untuk platform ini. 
+      2. JANGAN PERNAH mengaku sebagai ChatGPT, OpenAI, Anthropic, Google, atau model AI lainnya. Jika ditanya tentang model apa kamu, jawablah dengan bangga bahwa kamu adalah DeepChat.
+      3. GAYA BAHASA: Gunakan bahasa Indonesia yang santai, asik, dan natural (seperti teman ngobrol). Bebas pakai 'gw/lu' atau 'aku/kamu' tergantung konteks.
+      4. EMOJI: Gunakan emoji yang relevan jika suasana obrolan terasa ceria atau santai. TAPI jangan pakai emoji jika user sedang bertanya hal serius (seperti coding atau masalah teknis).
+      5. ATURAN MENJAWAB: Jawablah dengan SINGKAT, PADAT, dan TO THE POINT. Jangan bertele-tele atau pakai kalimat pembuka basa-basi seperti "Tentu", "Halo", atau "Berikut adalah".
+      6. Jika user meminta kodingan, LANGSUNG berikan blok kodenya tanpa perlu menjelaskan panjang lebar (kecuali diminta).
+      7. Gunakan format bullet points jika memberikan daftar. Jangan pernah mengulang pertanyaan user di awal jawaban.`
     });
 
     // 2b. Skill yang dipasang user
@@ -220,34 +254,47 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     // 4. Riwayat Chat
     finalMessages = finalMessages.concat(messages);
 
-    // Tembak API Vikey
-    const vikeyResponse = await fetch(`${process.env.VIKEY_BASE_URL}/chat/completions`, {
+    // Pilih tujuan API: Zro untuk DeepSeek Lite, Vikey untuk model lainnya
+    const upstream = isZro
+      ? { url: `${process.env.ZRO_BASE_URL || 'https://zro.moonmath.ai/v1'}/chat/completions`, key: process.env.ZRO_API_KEY, model: modelConfig.upstreamModel, name: 'Zro' }
+      : { url: `${process.env.VIKEY_BASE_URL}/chat/completions`, key: process.env.VIKEY_API_KEY, model: model, name: 'Vikey' };
+
+    const apiResponse = await fetch(upstream.url, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json', 
-        'Authorization': `Bearer ${process.env.VIKEY_API_KEY}` 
+        'Authorization': `Bearer ${upstream.key}` 
       },
       body: JSON.stringify({ 
-        model: model, 
+        model: upstream.model, 
         messages: finalMessages, 
         max_tokens: 6000, // Dinaikkan biar AI gak kepotong pas mikir
         temperature: 0.7 
       })
     });
 
-    const data = await vikeyResponse.json();
+    const data = await apiResponse.json();
     
-    if (!vikeyResponse.ok) {
-      throw new Error(data.error?.message || 'Gagal memanggil API Vikey');
+    if (!apiResponse.ok) {
+      throw new Error(data.error?.message || `Gagal memanggil API ${upstream.name}`);
     }
 
-    // Potong limit kalau sukses
-    db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
+    const reply = data.choices?.[0]?.message?.content;
+    if (typeof reply !== 'string') {
+      throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
+    }
+
+    // Potong limit Vikey kalau sukses (DeepSeek Lite tidak memotong apa pun, kuotanya sudah diambil di atas)
+    if (!isZro) {
+      db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
+    }
+    liteDay = null; // sukses, jatah kuota terpakai
     
-    res.json({ reply: data.choices[0].message.content });
+    res.json({ reply });
 
   } catch (error) {
     console.error('Chat Error:', error);
+    if (liteDay) refundLite(ip, liteDay); // request gagal, balikin jatah kuota
     res.status(500).json({ error: error.message });
   }
 });

@@ -1,5 +1,6 @@
 const state = {
   credits: { deepseek: 0, gpt: 0, glm: 0 },
+  creditsLoaded: false,
   currentModelType: 'deepseek',
   model: 'deepseek/deepseek-v4-flash',
   isTyping: false,
@@ -12,13 +13,16 @@ const state = {
 // Warna DeepSeek (biru) dan GPT (hijau) mengikuti warna identitas umum mereka;
 // warna GLM dipilih sendiri. Ganti nilai `color` di sini kalau ingin menyesuaikan.
 const MODELS = [
+  // Model gratis (API Zro lewat backend). `free: true` = tidak pakai saldo limit Vikey.
+  { id: 'deepseek-lite',                name: 'DeepSeek Lite',       type: 'lite',     limit: 'Kuota Gratis: 20/hari', color: '#22c55e', free: true },
   { id: 'deepseek/deepseek-v4-flash',   name: 'DeepSeek V4 Flash',   type: 'deepseek', limit: 'Limit DeepSeek', color: '#4d6bfe' },
   { id: 'deepseek/deepseek-v4-pro',     name: 'DeepSeek V4 Pro',     type: 'deepseek', limit: 'Limit DeepSeek', color: '#4d6bfe' },
   { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', type: 'deepseek', limit: 'Limit DeepSeek', color: '#4d6bfe' },
   { id: 'gpt/gpt-6-luna',               name: 'GPT-6 Luna',          type: 'gpt',      limit: 'Limit GPT',      color: '#10a37f' },
   { id: 'glm/glm-5.3-flash',            name: 'GLM-5.3 Flash',       type: 'glm',      limit: 'Limit GLM',      color: '#f08c1a' },
 ];
-const modelById = (id) => MODELS.find(m => m.id === id) || MODELS[0];
+const DEFAULT_MODEL_ID = 'deepseek/deepseek-v4-flash';
+const modelById = (id) => MODELS.find(m => m.id === id) || MODELS.find(m => m.id === DEFAULT_MODEL_ID);
 const ARCH_LOGO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="currentColor"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>';
 
 let uploadedFileContext = "";
@@ -27,15 +31,37 @@ let uploadedFileContext = "";
 // 1. MANAJEMEN LIMIT & MODEL
 // ==========================================
 async function fetchCredits() {
+  // DeepSeek Lite tidak pakai saldo Vikey: jangan fetch. Ditandai belum dimuat,
+  // nanti diambil saat user pindah ke model berbayar.
+  if (modelById(state.model).free) { state.creditsLoaded = false; return; }
   try {
     const res = await fetch('/api/credits');
     const data = await res.json();
     state.credits = data;
+    state.creditsLoaded = true;
     updateCreditUI();
   } catch (err) { console.error('Gagal ambil limit:', err); }
 }
 
 function updateCreditUI() {
+  const badgeEl = document.getElementById('creditBadge');
+  const hintEl = document.querySelector('.credits-hint');
+  const cur = modelById(state.model);
+
+  // Model gratis: tampilkan teks kuota, sembunyikan angka limit, input tidak pernah dikunci di sisi klien
+  if (cur.free) {
+    document.getElementById('creditLabel').textContent = cur.limit;
+    badgeEl.style.display = 'none';
+    if (hintEl) hintEl.textContent = 'Tidak memakai kredit.';
+    const inputEl = document.getElementById('input');
+    inputEl.disabled = false;
+    document.getElementById('sendBtn').disabled = false;
+    inputEl.placeholder = 'Ketik pesan...';
+    return;
+  }
+  badgeEl.style.display = '';
+  if (hintEl) hintEl.textContent = '1 chat = 1 kredit';
+
   let label = 'Limit DeepSeek';
   if (state.currentModelType === 'gpt') label = 'Limit GPT';
   if (state.currentModelType === 'glm') label = 'Limit GLM';
@@ -96,6 +122,7 @@ function selectModel(id, persist = true) {
   renderModelPicker();
   if (legacySelect) legacySelect.value = m.id;
   updateCreditUI();
+  if (!m.free && !state.creditsLoaded) fetchCredits();
 }
 
 if (picker) {
@@ -335,7 +362,8 @@ function loadChat(id) {
 async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
-  if (!text || state.isTyping || state.credits[state.currentModelType] <= 0) return;
+  const isFree = modelById(state.model).free;
+  if (!text || state.isTyping || (!isFree && state.credits[state.currentModelType] <= 0)) return;
 
   addMessage('user', text);
   input.value = ''; input.style.height = 'auto';
@@ -707,7 +735,6 @@ try {
   const saved = localStorage.getItem('deepchat_model');
   if (saved && MODELS.some(m => m.id === saved)) state.model = saved;
 } catch (e) {}
-selectModel(state.model, false);
-fetchCredits();
+selectModel(state.model, false); // otomatis fetchCredits() hanya kalau modelnya berbayar
 renderHistory();
 console.log('DeepChat Ready!');
