@@ -1,7 +1,7 @@
 const state = {
   credits: { deepseek: 0, gpt: 0, glm: 0 },
   currentModelType: 'deepseek',
-  model: 'deepseek/deepseek-v4.1-flash',
+  model: 'deepseek/deepseek-v4-flash',
   isTyping: false,
   messages: [],
   currentChatId: null,
@@ -58,18 +58,18 @@ document.getElementById('modelSelect').addEventListener('change', (e) => {
 const settingsModal = document.getElementById('settingsModal');
 const personaInput = document.getElementById('personaInput');
 
-personaInput.value = state.persona;
+if (personaInput) personaInput.value = state.persona;
 
-document.getElementById('settingsBtn').addEventListener('click', () => {
+document.getElementById('settingsBtn')?.addEventListener('click', () => {
   personaInput.value = state.persona;
   settingsModal.classList.add('active');
 });
 
-document.getElementById('closeSettingsBtn').addEventListener('click', () => {
+document.getElementById('closeSettingsBtn')?.addEventListener('click', () => {
   settingsModal.classList.remove('active');
 });
 
-document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+document.getElementById('saveSettingsBtn')?.addEventListener('click', () => {
   state.persona = personaInput.value.trim();
   localStorage.setItem('deepchat_persona', state.persona);
   alert('Persona berhasil disimpan!');
@@ -132,32 +132,26 @@ window.handleFileUpload = function(event) {
 };
 
 // ==========================================
-// 5. SYNTAX HIGHLIGHTING UPGRADE
+// 5. SYNTAX HIGHLIGHTING
 // ==========================================
 function highlightCode(code, lang) {
   let h = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
   h = h.replace(/(['"`])(?:(?!\1).)*\1/g, '<span class="token-string">$&</span>');
   h = h.replace(/(\/\/.*|\/\*[\s\S]*?\*\/|#.*)/g, '<span class="token-comment">$1</span>');
-  
   const jsKeywords = /\b(function|const|let|var|if|else|return|for|while|switch|case|break|continue|new|class|extends|import|export|from|default|try|catch|finally|throw|async|await|this|typeof|instanceof|in|of|console|log|document|window)\b/g;
   h = h.replace(jsKeywords, '<span class="token-keyword">$1</span>');
-
   h = h.replace(/\b(\d+)\b/g, '<span class="token-number">$1</span>');
   h = h.replace(/(\+|\-|\*|\/|===|==|=>|=|\+\+|--)/g, '<span class="token-operator">$1</span>');
-
   return h;
 }
 
 function formatMessage(text) {
   const parts = text.split(/(```[\s\S]*?```)/g);
-  
   return parts.map(part => {
     if (part.startsWith('```') && part.endsWith('```')) {
       const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
       const lang = match ? match[1].toLowerCase() : 'text';
       const rawCode = match ? match[2].trim() : part.replace(/```/g, '').trim();
-      
       const highlighted = highlightCode(rawCode, lang);
       const escapedAttr = rawCode.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       
@@ -184,6 +178,7 @@ function addMessage(role, content, saveToHistory = true) {
   const msgDiv = document.createElement('div');
   msgDiv.className = `message ${role}`;
   
+  // Avatar SVG
   const archLogo = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="aiGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6366f1" /><stop offset="100%" stop-color="#8b5cf6" /></linearGradient></defs><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="url(#aiGrad)"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>`;
   const userLogo = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`;
 
@@ -224,6 +219,7 @@ function saveChatToLocal() {
 
 function renderHistory() {
   const list = document.getElementById('chatHistoryList');
+  if (!list) return;
   list.innerHTML = '';
   let allChats = JSON.parse(localStorage.getItem('deepchat_history') || '{}');
   const sortedChats = Object.values(allChats).sort((a, b) => b.id - a.id);
@@ -281,18 +277,82 @@ async function sendMessage() {
       })
     });
     
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.error || 'Gagal menghubungi server');
+    }
+
+    // Streaming Reader
+    document.getElementById('typingIndicator').classList.remove('active');
+    const welcome = document.getElementById('welcome');
+    if (welcome) welcome.style.display = 'none';
+
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `message ai`;
+    const bubbleId = 'stream-' + Date.now();
     
-    addMessage('ai', data.reply);
+    const archLogo = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="aiGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#6366f1" /><stop offset="100%" stop-color="#8b5cf6" /></linearGradient></defs><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="url(#aiGrad)"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>`;
+    
+    msgDiv.innerHTML = `
+      <div class="msg-avatar" style="background: transparent; border: none;">${archLogo}</div>
+      <div class="msg-content" id="${bubbleId}"></div>
+    `;
+    
+    document.getElementById('messages').appendChild(msgDiv);
+    const bubbleEl = document.getElementById(bubbleId);
+
+    let fullText = "";
+    const contentType = res.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      // Server membalas JSON biasa: { reply: "..." }
+      const data = await res.json();
+      fullText = data.reply || '';
+      bubbleEl.innerHTML = formatMessage(fullText);
+    } else {
+      // Cadangan kalau suatu saat server diubah jadi streaming (SSE)
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.text) {
+                fullText += data.text;
+                bubbleEl.innerHTML = formatMessage(fullText);
+              }
+            } catch (e) {}
+          }
+        }
+      }
+    }
+    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+
+    state.messages.push({ role: 'ai', content: fullText });
+    saveChatToLocal();
+    
+    msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(btn.getAttribute('data-code'));
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+      });
+    });
+
     await fetchCredits(); 
-    
     uploadedFileContext = ""; 
+
   } catch (err) {
+    document.getElementById('typingIndicator').classList.remove('active');
     addMessage('ai', `Error: ${err.message}`);
   } finally {
     state.isTyping = false;
-    document.getElementById('typingIndicator').classList.remove('active');
   }
 }
 
