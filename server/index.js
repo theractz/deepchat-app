@@ -19,31 +19,26 @@ const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH
 console.log(`Menggunakan database di: ${dbPath}`);
 const db = new Database(dbPath);
 
-// Bikin tabel kalau belum ada
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (ip TEXT PRIMARY KEY, deepseek_limit INTEGER DEFAULT 5, gpt_limit INTEGER DEFAULT 0, glm_limit INTEGER DEFAULT 0);
   CREATE TABLE IF NOT EXISTS redeem_codes (code TEXT PRIMARY KEY, deepseek_amount INTEGER DEFAULT 0, gpt_amount INTEGER DEFAULT 0, glm_amount INTEGER DEFAULT 0, is_used BOOLEAN DEFAULT 0);
 `);
 
-// Kuota gratis harian per IP untuk model DeepSeek Lite (sekarang pakai Groq)
+// Kuota gratis harian per IP untuk model DeepSeek Lite (Groq)
 db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (ip TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (ip, day));`);
 const LITE_DAILY_QUOTA = 20;
-// Reset tiap hari mengikuti WIB (UTC+7)
 const todayWIB = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
-// Ambil 1 jatah kuota. Return string hari kalau berhasil, null kalau kuota habis.
 function reserveLite(ip) {
   const day = todayWIB();
   db.prepare('INSERT OR IGNORE INTO lite_usage (ip, day, count) VALUES (?, ?, 0)').run(ip, day);
   const r = db.prepare('UPDATE lite_usage SET count = count + 1 WHERE ip = ? AND day = ? AND count < ?').run(ip, day, LITE_DAILY_QUOTA);
   return r.changes > 0 ? day : null;
 }
-// Kembalikan jatah kalau request ke Groq gagal
 function refundLite(ip, day) {
   db.prepare('UPDATE lite_usage SET count = MAX(count - 1, 0) WHERE ip = ? AND day = ?').run(ip, day);
 }
 
-// Bikin kode default kalau database masih kosong
 const checkCodes = db.prepare('SELECT COUNT(*) as count FROM redeem_codes').get();
 if (checkCodes.count === 0) {
   const insertCode = db.prepare('INSERT INTO redeem_codes (code, deepseek_amount, gpt_amount, glm_amount) VALUES (?, ?, ?, ?)');
@@ -52,13 +47,11 @@ if (checkCodes.count === 0) {
 }
 
 // ==========================================
-// DAFTAR MODEL YANG BOLEH DIPAKAI (WHITELIST)
-// type = jenis limit yang dipotong, cost = kredit per chat
+// 2. DAFTAR MODEL & SKILL HELPER
 // ==========================================
 const MAX_SKILLS = 3;
 const MAX_SKILL_CHARS = 6000;
 const MAX_SKILL_TOTAL = 12000;
-const MAX_FILE_CHARS = 40000; // batas isi file lampiran (samakan dengan app.js)
 
 function buildSkillsPrompt(skills) {
   if (!Array.isArray(skills)) return '';
@@ -74,14 +67,10 @@ function buildSkillsPrompt(skills) {
     parts.push(`### Skill: ${name}\n${desc ? `Kapan dipakai: ${desc}\n` : ''}${body}`);
   }
   if (parts.length === 0) return '';
-  return `SKILL AKTIF:
-Gunakan skill di bawah hanya jika relevan dengan permintaan user. Jika instruksi skill meminta format atau panjang jawaban tertentu, ikuti skill meskipun berbeda dari aturan gaya singkat di atas.
-
-${parts.join('\n\n')}`;
+  return `SKILL AKTIF:\nGunakan skill di bawah hanya jika relevan dengan permintaan user. Jika instruksi skill meminta format atau panjang jawaban tertentu, ikuti skill tersebut.\n\n${parts.join('\n\n')}`;
 }
 
 const ALLOWED_MODELS = {
-  // Model gratis lewat API Groq: tidak memotong limit Vikey, pakai kuota harian sendiri
   'deepseek-lite':                { type: 'lite',     cost: 0, provider: 'groq', upstreamModel: 'openai/gpt-oss-120b' },
   'deepseek/deepseek-v4-flash':   { type: 'deepseek', cost: 1 },
   'deepseek/deepseek-v4-pro':     { type: 'deepseek', cost: 1 },
@@ -91,17 +80,14 @@ const ALLOWED_MODELS = {
 };
 
 // ==========================================
-// 2. MIDDLEWARE & STATIC FILES
+// 3. MIDDLEWARE & ROUTING
 // ==========================================
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' })); // Limit dinaikkan buat file upload
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.set('trust proxy', 1);
 
-// ==========================================
-// 3. ROUTING HALAMAN
-// ==========================================
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'landing.html'));
 });
@@ -110,9 +96,6 @@ app.get('/admin-login.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-login.html'));
 });
 
-// ==========================================
-// 4. SISTEM LOGIN ADMIN
-// ==========================================
 const isAdmin = (req, res, next) => {
   if (req.cookies.admin_session === process.env.ADMIN_PASS) {
     next(); 
@@ -140,9 +123,6 @@ app.get('/panel-rahasia', isAdmin, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// ==========================================
-// 5. ENDPOINT ADMIN (GENERATE TOKEN)
-// ==========================================
 app.post('/api/admin/generate', isAdmin, (req, res) => {
   try {
     const { code, model, amount } = req.body;
@@ -166,7 +146,7 @@ app.post('/api/admin/generate', isAdmin, (req, res) => {
 });
 
 // ==========================================
-// 6. RATE LIMIT & CHAT AI
+// 4. RATE LIMIT & CHAT AI
 // ==========================================
 const guestLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, 
@@ -176,21 +156,9 @@ const guestLimiter = rateLimit({
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   const ip = req.ip;
-  let liteDay = null;     // jatah kuota Lite yang sudah diambil (untuk refund kalau gagal)
-  let charge = null;      // { modelType, cost } untuk model berbayar, dipotong setelah ada jawaban
-  let gotContent = false; // sudah ada teks jawaban yang terkirim ke user
-  let clientGone = false; // user menutup koneksi sebelum selesai
-
-  // Finalisasi biaya: potong limit Vikey (kalau berbayar) dan anggap kuota Lite terpakai
-  const commit = () => {
-    if (charge) {
-      db.prepare(`UPDATE users SET ${charge.modelType}_limit = ${charge.modelType}_limit - ? WHERE ip = ?`).run(charge.cost, ip);
-      charge = null;
-    }
-    liteDay = null;
-  };
-
+  let liteDay = null; 
   try {
+    // TANGKAP fileName DARI FRONTEND
     const { messages, model, persona, fileContext, fileName, skills } = req.body; 
 
     const modelConfig = ALLOWED_MODELS[model];
@@ -204,14 +172,13 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     const cost = modelConfig.cost;
     const isGroq = modelConfig.provider === 'groq';
 
-    // --- CEK LIMIT / KUOTA ---
     if (isGroq) {
       if (!process.env.GROQ_API_KEY) {
         return res.status(500).json({ error: 'DeepSeek Lite belum dikonfigurasi di server (Groq API Key missing).' });
       }
       liteDay = reserveLite(ip);
       if (!liteDay) {
-        return res.status(403).json({ error: `Kuota gratis DeepSeek Lite hari ini habis (${LITE_DAILY_QUOTA}/hari). Coba lagi besok atau pakai model lain.` });
+        return res.status(403).json({ error: `Kuota gratis DeepSeek Lite hari ini habis (${LITE_DAILY_QUOTA}/hari). Coba lagi besok.` });
       }
     } else {
       let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
@@ -228,7 +195,7 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     // --- SUSUN PESAN UNTUK AI ---
     let finalMessages = [];
     
-    // Tentukan Nama Model
+    // Identitas Model
     let modelName = "DeepSeek V4.1 Flash"; 
     if (model === 'deepseek-lite') modelName = "DeepSeek Lite (Gratis)";
     else if (model.includes('v4-flash')) modelName = "DeepSeek V4 Flash";
@@ -236,149 +203,77 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     else if (model.includes('gpt')) modelName = "GPT-6 Luna";
     else if (model.includes('glm')) modelName = "GLM-5.3 Flash";
 
-    // 1. Persona
-    if (typeof persona === 'string' && persona.trim() !== "") {
+    if (persona && persona.trim() !== "") {
       finalMessages.push({ role: "system", content: `Kamu adalah AI dengan persona: ${persona}.` });
     }
 
-    // 2. ATURAN KEPRIBADIAN
     finalMessages.push({
       role: "system",
       content: `ATURAN MENJAWAB (WAJIB DIPATUHI):
-      1. IDENTITAS: Kamu adalah **${modelName}**, model AI yang sangat canggih dan pintar. Kamu bangga dengan kemampuanmu!
-      2. TRANSPARANSI: Jika user bertanya "Kamu model apa?", jawablah dengan bangga dan jujur bahwa kamu adalah ${modelName}. Jangan mengaku sebagai model lain.
+      1. IDENTITAS: Kamu adalah **${modelName}**, model AI yang sangat canggih. Kamu bangga dengan kemampuanmu!
+      2. TRANSPARANSI: Jika ditanya "Kamu model apa?", jawablah dengan bangga bahwa kamu adalah ${modelName}. Jangan mengaku sebagai model lain.
       3. GAYA BAHASA: Santai, asik, natural (gw/lu atau aku/kamu).
-      4. EMOJI: Pakai jika suasananya santai, jangan pakai jika serius.
+      4. EMOJI: Pakai jika suasananya santai.
       5. ATURAN MENJAWAB: Singkat, padat, to the point. Tanpa basa-basi.
       6. Kodingan: Langsung kasih blok kodenya.
       7. Jangan ulangi pertanyaan user.`
     });
 
-    // 2b. Skill
     const skillsPrompt = buildSkillsPrompt(skills);
     if (skillsPrompt) finalMessages.push({ role: "system", content: skillsPrompt });
 
-    // 3. Konteks File
-    if (typeof fileContext === 'string' && fileContext.trim() !== "") {
-      const fname = String(fileName || 'file').slice(0, 100);
-      finalMessages.push({
-        role: "system",
-        content: `User melampirkan file "${fname}". Isinya:\n---\n${fileContext.slice(0, MAX_FILE_CHARS)}\n---\nJawab pertanyaan user berdasarkan isi file ini kalau relevan.`
+    // TAMBAHKAN NAMA FILE KE KONTEKS
+    if (fileContext && fileContext.trim() !== "") {
+      const fileLabel = fileName ? `File: ${fileName}\n` : '';
+      finalMessages.push({ 
+        role: "system", 
+        content: `Berikut adalah isi file/dokumen yang diupload user:\n${fileLabel}---\n${fileContext}\n---` 
       });
     }
 
-    // 4. Riwayat Chat
     finalMessages = finalMessages.concat(messages);
 
-    // --- TEMBAK API (STREAMING) ---
+    // --- TEMBAK API ---
     const upstream = isGroq
       ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY, model: modelConfig.upstreamModel, name: 'Groq' }
       : { url: `${process.env.VIKEY_BASE_URL}/chat/completions`, key: process.env.VIKEY_API_KEY, model: model, name: 'Vikey' };
-    if (!isGroq) charge = { modelType, cost };
-
-    // Kalau user menutup tab / menekan stop, hentikan juga request ke provider supaya token tidak terbuang
-    const abortCtl = new AbortController();
-    res.on('close', () => {
-      if (!res.writableEnded) { clientGone = true; abortCtl.abort(); }
-    });
 
     const apiResponse = await fetch(upstream.url, {
       method: 'POST',
-      signal: abortCtl.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${upstream.key}`
+      headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${upstream.key}` 
       },
-      body: JSON.stringify({
-        model: upstream.model,
-        messages: finalMessages,
-        max_tokens: 6000,
-        temperature: 0.7,
-        stream: true
+      body: JSON.stringify({ 
+        model: upstream.model, 
+        messages: finalMessages, 
+        max_tokens: 6000, 
+        temperature: 0.7 
       })
     });
 
-    if (!apiResponse.ok) {
-      let errData = {};
-      try { errData = await apiResponse.json(); } catch (e) {}
-      throw new Error(errData.error?.message || `Gagal memanggil API ${upstream.name}`);
+    const data = await apiResponse.json();
+    if (!apiResponse.ok) throw new Error(data.error?.message || `Gagal memanggil API ${upstream.name}`);
+
+    const reply = data.choices?.[0]?.message?.content;
+    if (typeof reply !== 'string') throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
+
+    if (!isGroq) {
+      db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
     }
-
-    // Cadangan: kalau provider ternyata membalas JSON biasa (tidak streaming), kirim utuh
-    const upstreamType = apiResponse.headers.get('content-type') || '';
-    if (!upstreamType.includes('text/event-stream')) {
-      const data = await apiResponse.json();
-      const reply = data.choices?.[0]?.message?.content;
-      if (typeof reply !== 'string') throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
-      gotContent = true;
-      commit();
-      return res.json({ reply });
-    }
-
-    // Header SSE ke browser
-    res.status(200);
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // jangan di-buffer oleh proxy
-    res.flushHeaders();
-
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-    const decoder = new TextDecoder();
-    let buf = '';
-
-    const handleLine = (rawLine) => {
-      const line = rawLine.trim();
-      if (!line.startsWith('data:')) return;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === '[DONE]') return;
-      let json;
-      try { json = JSON.parse(payload); } catch (e) { return; }
-      if (json.error) throw new Error(json.error.message || `Error dari API ${upstream.name}`);
-      // Hanya teks jawaban; proses "berpikir" (reasoning) tidak diteruskan
-      const delta = json.choices?.[0]?.delta?.content;
-      if (typeof delta === 'string' && delta) {
-        gotContent = true;
-        send({ delta });
-      }
-    };
-
-    for await (const chunk of apiResponse.body) {
-      buf += decoder.decode(chunk, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      lines.forEach(handleLine);
-    }
-    if (buf) handleLine(buf);
-
-    if (!gotContent) throw new Error(`Balasan dari API ${upstream.name} kosong.`);
-
-    commit();
-    send({ done: true });
-    res.end();
+    liteDay = null; 
+    
+    res.json({ reply });
 
   } catch (error) {
-    // User sudah pergi: tagih hanya kalau sempat ada jawaban, selain itu kembalikan jatah
-    if (clientGone) {
-      if (gotContent) commit(); else if (liteDay) refundLite(ip, liteDay);
-      return;
-    }
-
     console.error('Chat Error:', error);
-    if (gotContent) commit();                       // jawaban sebagian sudah diterima user
-    else if (liteDay) refundLite(ip, liteDay);      // tidak ada jawaban, balikin jatah kuota
-
-    if (res.headersSent) {
-      // Sudah terlanjur streaming: kabari lewat SSE lalu tutup
-      try { res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`); } catch (e) {}
-      return res.end();
-    }
+    if (liteDay) refundLite(ip, liteDay); 
     res.status(500).json({ error: error.message });
   }
 });
 
 // ==========================================
-// 7. ENDPOINT CEK LIMIT & REDEEM
+// 5. ENDPOINT CEK LIMIT & REDEEM
 // ==========================================
 app.get('/api/credits', (req, res) => {
   const ip = req.ip;
@@ -420,7 +315,7 @@ app.post('/api/redeem', (req, res) => {
 });
 
 // ==========================================
-// 8. JALANKAN SERVER
+// 6. JALANKAN SERVER
 // ==========================================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server jalan di port ${PORT}`);
