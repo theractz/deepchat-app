@@ -6,6 +6,17 @@ const Database = require('better-sqlite3');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
+const admin = require('firebase-admin');
+
+// Di Railway: baca dari environment variable. Di laptop: baca dari file.
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
+  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  : require('./serviceAccountKey.json');
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 

@@ -8,6 +8,10 @@ const state = {
   messages: [],
   currentChatId: null,
   persona: localStorage.getItem('deepchat_persona') || "",
+  user: null,          // objek user Firebase (null = belum login)
+  authReady: false,    // true setelah Firebase selesai memeriksa sesi
+  authError: false,    // true kalau SDK Firebase gagal dimuat
+  loggingIn: false,    // popup login sedang terbuka
 };
 
 // Daftar model: satu sumber untuk dropdown, label limit, dan warna avatar AI.
@@ -26,6 +30,141 @@ const DEFAULT_MODEL_ID = 'deepseek/deepseek-v4-flash';
 const modelById = (id) => MODELS.find(m => m.id === id) || MODELS.find(m => m.id === DEFAULT_MODEL_ID);
 const ARCH_LOGO = '<img src="logo.png" width="18" height="18" alt="" style="display:block;object-fit:contain">';
 
+// ==========================================
+// 0. AUTENTIKASI (Firebase Auth)
+// ==========================================
+let currentUserToken = null; // ID token Firebase user yang sedang login
+
+// Semua panggilan ke /api/* lewat sini supaya selalu membawa header Authorization.
+// getIdToken() memakai cache dan memperbarui token otomatis kalau sudah hampir kedaluwarsa.
+async function authFetch(url, options = {}) {
+  if (state.user) {
+    try { currentUserToken = await state.user.getIdToken(); }
+    catch (e) { console.error('Gagal memperbarui token:', e); }
+  }
+  const headers = { ...(options.headers || {}) };
+  if (currentUserToken) headers.Authorization = `Bearer ${currentUserToken}`;
+  return fetch(url, { ...options, headers });
+}
+
+function renderAuthUI() {
+  const $ = (id) => document.getElementById(id);
+  const loginBtn = $('loginBtn');
+  if (!loginBtn) return;
+  const u = state.user;
+
+  // Tombol login / kartu user
+  loginBtn.hidden = !!u;
+  $('userCard').hidden = !u;
+  loginBtn.disabled = !state.authReady || state.loggingIn;
+  $('loginBtnLabel').textContent = state.authError ? 'Login tidak tersedia'
+    : state.loggingIn ? 'Membuka Google…'
+    : state.authReady ? 'Login dengan Google'
+    : 'Memeriksa login…';
+
+  const errEl = $('authError');
+  errEl.hidden = !state.authError;
+  errEl.textContent = state.authError ? 'Layanan login gagal dimuat. Periksa koneksi lalu muat ulang halaman.' : '';
+
+  if (u) {
+    const name = u.displayName || u.email || 'Pengguna';
+    $('userName').textContent = name;
+    $('userEmail').textContent = u.email && u.email !== name ? u.email : '';
+    const av = $('userAvatar');
+    const initial = name.trim().charAt(0).toUpperCase() || '?';
+    av.textContent = '';
+    if (u.photoURL) {
+      const img = new Image();
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer'; // foto Google kadang gagal tampil tanpa ini
+      img.onerror = () => { av.textContent = initial; };
+      img.src = u.photoURL;
+      av.appendChild(img);
+    } else {
+      av.textContent = initial;
+    }
+  }
+
+  // Peringatan di atas kotak chat: tampil hanya saat sudah pasti belum login
+  const notice = $('loginNotice');
+  if (notice) {
+    notice.hidden = !!u || !(state.authReady || state.authError);
+    $('loginNoticeText').textContent = state.authError ? 'Login tidak tersedia saat ini.' : 'Login dulu untuk mulai chat.';
+    $('loginNoticeBtn').hidden = state.authError;
+    $('loginNoticeBtn').disabled = state.loggingIn;
+  }
+}
+
+function authErrorMessage(err) {
+  switch (err && err.code) {
+    case 'auth/popup-blocked': return 'Popup login diblokir browser. Izinkan popup untuk situs ini lalu coba lagi.';
+    case 'auth/unauthorized-domain': return 'Domain ini belum didaftarkan di Firebase (Authentication > Settings > Authorized domains).';
+    case 'auth/network-request-failed': return 'Koneksi bermasalah. Periksa internet lalu coba lagi.';
+    default: return `Login gagal${err && err.code ? ` (${err.code})` : ''}. Coba lagi.`;
+  }
+}
+
+async function loginWithGoogle() {
+  const sdk = window.firebaseSDK;
+  if (!sdk || !window.firebaseAuth) { alert('Login belum siap. Muat ulang halaman lalu coba lagi.'); return; }
+  if (state.loggingIn) return;
+  state.loggingIn = true; renderAuthUI();
+  try {
+    await sdk.signInWithPopup(window.firebaseAuth, new sdk.GoogleAuthProvider());
+  } catch (err) {
+    // User menutup popup sendiri: bukan error
+    if (err && (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request')) return;
+    console.error('Login gagal:', err);
+    alert(authErrorMessage(err));
+  } finally {
+    state.loggingIn = false; renderAuthUI();
+  }
+}
+
+async function logout() {
+  try { await window.firebaseSDK.signOut(window.firebaseAuth); }
+  catch (err) { console.error('Logout gagal:', err); alert('Logout gagal. Coba lagi.'); }
+}
+
+function initAuth() {
+  let started = false;
+
+  const start = () => {
+    if (started) return;
+    started = true;
+    clearTimeout(timer);
+    window.firebaseSDK.onAuthStateChanged(window.firebaseAuth, async (user) => {
+      state.user = user;
+      try { currentUserToken = user ? await user.getIdToken() : null; }
+      catch (e) { currentUserToken = null; console.error('Gagal ambil token:', e); }
+      state.authReady = true;
+      state.authError = false;
+      // Limit milik akun sebelumnya tidak boleh tersisa di layar
+      state.credits = { deepseek: 0, gpt: 0, glm: 0 };
+      state.creditsLoaded = false;
+      renderAuthUI();
+      updateCreditUI();
+      if (user) fetchCredits();
+    });
+  };
+  const fail = () => {
+    if (started) return;
+    state.authError = true;
+    renderAuthUI();
+    updateCreditUI();
+  };
+
+  // app.js jalan lebih dulu daripada <script type="module">, jadi tunggu sinyalnya
+  const timer = setTimeout(fail, 8000);
+  window.addEventListener('firebase-ready', start);
+  window.addEventListener('firebase-error', fail);
+  if (window.firebaseAuth && window.firebaseSDK) start();
+
+  document.getElementById('loginBtn')?.addEventListener('click', loginWithGoogle);
+  document.getElementById('loginNoticeBtn')?.addEventListener('click', loginWithGoogle);
+  document.getElementById('logoutBtn')?.addEventListener('click', logout);
+}
+
 
 // ==========================================
 // 1. MANAJEMEN LIMIT & MODEL
@@ -34,9 +173,11 @@ async function fetchCredits() {
   // DeepSeek Lite tidak pakai saldo Vikey: jangan fetch. Ditandai belum dimuat,
   // nanti diambil saat user pindah ke model berbayar.
   if (modelById(state.model).free) { state.creditsLoaded = false; return; }
+  if (!state.user) return; // endpoint butuh token login
   try {
-    const res = await fetch('/api/credits');
+    const res = await authFetch('/api/credits');
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal ambil limit');
     state.credits = data;
     state.creditsLoaded = true;
     updateCreditUI();
@@ -46,17 +187,27 @@ async function fetchCredits() {
 function updateCreditUI() {
   const badgeEl = document.getElementById('creditBadge');
   const hintEl = document.querySelector('.credits-hint');
+  const input = document.getElementById('input');
+  const sendBtn = document.getElementById('sendBtn');
+  const fileInput = document.getElementById('fileUpload');
   const cur = modelById(state.model);
+  const loggedIn = !!state.user;
+  const lockedHint = (state.authReady || state.authError) ? 'Login dulu untuk mulai chat.' : 'Memeriksa status login...';
 
-  // Model gratis: tampilkan teks kuota, sembunyikan angka limit, input tidak pernah dikunci di sisi klien
+  // Satu pintu untuk status kolom chat: belum login selalu terkunci
+  const setComposer = (enabled, placeholder) => {
+    input.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+    if (fileInput) fileInput.disabled = !loggedIn;
+    input.placeholder = placeholder;
+  };
+
+  // Model gratis: tampilkan teks kuota, sembunyikan angka limit
   if (cur.free) {
     document.getElementById('creditLabel').textContent = cur.limit;
     badgeEl.style.display = 'none';
     if (hintEl) hintEl.textContent = 'Tidak memakai kredit.';
-    const inputEl = document.getElementById('input');
-    inputEl.disabled = false;
-    document.getElementById('sendBtn').disabled = false;
-    inputEl.placeholder = 'Ketik pesan...';
+    if (loggedIn) setComposer(true, 'Ketik pesan...'); else setComposer(false, lockedHint);
     return;
   }
   badgeEl.style.display = '';
@@ -65,21 +216,14 @@ function updateCreditUI() {
   let label = 'Limit DeepSeek';
   if (state.currentModelType === 'gpt') label = 'Limit GPT';
   if (state.currentModelType === 'glm') label = 'Limit GLM';
-  
+
   const currentLimit = state.credits[state.currentModelType];
   document.getElementById('creditLabel').textContent = label;
-  document.getElementById('creditBadge').textContent = currentLimit;
-  
-  const input = document.getElementById('input');
-  const sendBtn = document.getElementById('sendBtn');
-  
-  if (currentLimit <= 0) {
-    input.disabled = true; sendBtn.disabled = true;
-    input.placeholder = `${label} habis. Tukar kode atau beli paket lewat ikon keranjang.`;
-  } else {
-    input.disabled = false; sendBtn.disabled = false;
-    input.placeholder = 'Ketik pesan...';
-  }
+  badgeEl.textContent = loggedIn ? currentLimit : '–';
+
+  if (!loggedIn) setComposer(false, lockedHint);
+  else if (currentLimit <= 0) setComposer(false, `${label} habis. Tukar kode atau beli paket lewat ikon keranjang.`);
+  else setComposer(true, 'Ketik pesan...');
 }
 
 const CHEV = '<svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
@@ -186,7 +330,10 @@ document.getElementById('savePersonaBtn')?.addEventListener('click', () => {
 // ==========================================
 // 3. REDEEM KODE
 // ==========================================
-document.getElementById('redeemBtn').addEventListener('click', () => document.getElementById('redeemModal').classList.add('active'));
+document.getElementById('redeemBtn').addEventListener('click', () => {
+  if (!state.user) { alert('Login dulu untuk menukar kode.'); return; }
+  document.getElementById('redeemModal').classList.add('active');
+});
 document.getElementById('cancelRedeem').addEventListener('click', () => document.getElementById('redeemModal').classList.remove('active'));
 
 document.getElementById('confirmRedeem').addEventListener('click', async () => {
@@ -195,7 +342,7 @@ document.getElementById('confirmRedeem').addEventListener('click', async () => {
   const btn = document.getElementById('confirmRedeem');
   btn.textContent = 'Memproses...'; btn.disabled = true;
   try {
-    const res = await fetch('/api/redeem', {
+    const res = await authFetch('/api/redeem', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code })
     });
@@ -418,6 +565,7 @@ async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
   const isFree = modelById(state.model).free;
+  if (!state.user) return; // wajib login
   if (state.attachedFile && state.attachedFile.loading) return; // tunggu file selesai dibaca
   if (!text || state.isTyping || (!isFree && state.credits[state.currentModelType] <= 0)) return;
 
@@ -462,7 +610,7 @@ async function sendMessage() {
       .map(msg => ({ role: msg.role === 'ai' ? 'assistant' : 'user', content: msg.content }));
     if (cleanMessages.length > 0 && cleanMessages[0].role === 'assistant') cleanMessages.shift();
 
-    const res = await fetch('/api/chat', {
+    const res = await authFetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: cleanMessages,
@@ -816,6 +964,8 @@ try {
   const saved = localStorage.getItem('deepchat_model');
   if (saved && MODELS.some(m => m.id === saved)) state.model = saved;
 } catch (e) {}
-selectModel(state.model, false); // otomatis fetchCredits() hanya kalau modelnya berbayar
+selectModel(state.model, false); // fetchCredits() baru jalan setelah user login
+renderAuthUI();
+initAuth();
 renderHistory();
 console.log('DeepChat Ready!');
