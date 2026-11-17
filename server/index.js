@@ -176,7 +176,20 @@ const guestLimiter = rateLimit({
 
 app.post('/api/chat', guestLimiter, async (req, res) => {
   const ip = req.ip;
-  let liteDay = null; 
+  let liteDay = null;     // jatah kuota Lite yang sudah diambil (untuk refund kalau gagal)
+  let charge = null;      // { modelType, cost } untuk model berbayar, dipotong setelah ada jawaban
+  let gotContent = false; // sudah ada teks jawaban yang terkirim ke user
+  let clientGone = false; // user menutup koneksi sebelum selesai
+
+  // Finalisasi biaya: potong limit Vikey (kalau berbayar) dan anggap kuota Lite terpakai
+  const commit = () => {
+    if (charge) {
+      db.prepare(`UPDATE users SET ${charge.modelType}_limit = ${charge.modelType}_limit - ? WHERE ip = ?`).run(charge.cost, ip);
+      charge = null;
+    }
+    liteDay = null;
+  };
+
   try {
     const { messages, model, persona, fileContext, fileName, skills } = req.body; 
 
@@ -257,46 +270,109 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
     // 4. Riwayat Chat
     finalMessages = finalMessages.concat(messages);
 
-    // --- TEMBAK API ---
+    // --- TEMBAK API (STREAMING) ---
     const upstream = isGroq
       ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY, model: modelConfig.upstreamModel, name: 'Groq' }
       : { url: `${process.env.VIKEY_BASE_URL}/chat/completions`, key: process.env.VIKEY_API_KEY, model: model, name: 'Vikey' };
+    if (!isGroq) charge = { modelType, cost };
+
+    // Kalau user menutup tab / menekan stop, hentikan juga request ke provider supaya token tidak terbuang
+    const abortCtl = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) { clientGone = true; abortCtl.abort(); }
+    });
 
     const apiResponse = await fetch(upstream.url, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': `Bearer ${upstream.key}` 
+      signal: abortCtl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${upstream.key}`
       },
-      body: JSON.stringify({ 
-        model: upstream.model, 
-        messages: finalMessages, 
-        max_tokens: 6000, 
-        temperature: 0.7 
+      body: JSON.stringify({
+        model: upstream.model,
+        messages: finalMessages,
+        max_tokens: 6000,
+        temperature: 0.7,
+        stream: true
       })
     });
 
-    const data = await apiResponse.json();
-    
     if (!apiResponse.ok) {
-      throw new Error(data.error?.message || `Gagal memanggil API ${upstream.name}`);
+      let errData = {};
+      try { errData = await apiResponse.json(); } catch (e) {}
+      throw new Error(errData.error?.message || `Gagal memanggil API ${upstream.name}`);
     }
 
-    const reply = data.choices?.[0]?.message?.content;
-    if (typeof reply !== 'string') {
-      throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
+    // Cadangan: kalau provider ternyata membalas JSON biasa (tidak streaming), kirim utuh
+    const upstreamType = apiResponse.headers.get('content-type') || '';
+    if (!upstreamType.includes('text/event-stream')) {
+      const data = await apiResponse.json();
+      const reply = data.choices?.[0]?.message?.content;
+      if (typeof reply !== 'string') throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
+      gotContent = true;
+      commit();
+      return res.json({ reply });
     }
 
-    if (!isGroq) {
-      db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
+    // Header SSE ke browser
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // jangan di-buffer oleh proxy
+    res.flushHeaders();
+
+    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    const handleLine = (rawLine) => {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      let json;
+      try { json = JSON.parse(payload); } catch (e) { return; }
+      if (json.error) throw new Error(json.error.message || `Error dari API ${upstream.name}`);
+      // Hanya teks jawaban; proses "berpikir" (reasoning) tidak diteruskan
+      const delta = json.choices?.[0]?.delta?.content;
+      if (typeof delta === 'string' && delta) {
+        gotContent = true;
+        send({ delta });
+      }
+    };
+
+    for await (const chunk of apiResponse.body) {
+      buf += decoder.decode(chunk, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      lines.forEach(handleLine);
     }
-    liteDay = null; 
-    
-    res.json({ reply });
+    if (buf) handleLine(buf);
+
+    if (!gotContent) throw new Error(`Balasan dari API ${upstream.name} kosong.`);
+
+    commit();
+    send({ done: true });
+    res.end();
 
   } catch (error) {
+    // User sudah pergi: tagih hanya kalau sempat ada jawaban, selain itu kembalikan jatah
+    if (clientGone) {
+      if (gotContent) commit(); else if (liteDay) refundLite(ip, liteDay);
+      return;
+    }
+
     console.error('Chat Error:', error);
-    if (liteDay) refundLite(ip, liteDay); 
+    if (gotContent) commit();                       // jawaban sebagian sudah diterima user
+    else if (liteDay) refundLite(ip, liteDay);      // tidak ada jawaban, balikin jatah kuota
+
+    if (res.headersSent) {
+      // Sudah terlanjur streaming: kabari lewat SSE lalu tutup
+      try { res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`); } catch (e) {}
+      return res.end();
+    }
     res.status(500).json({ error: error.message });
   }
 });

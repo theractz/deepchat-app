@@ -24,7 +24,7 @@ const MODELS = [
 ];
 const DEFAULT_MODEL_ID = 'deepseek/deepseek-v4-flash';
 const modelById = (id) => MODELS.find(m => m.id === id) || MODELS.find(m => m.id === DEFAULT_MODEL_ID);
-const ARCH_LOGO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="currentColor"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>';
+const ARCH_LOGO = '<img src="logo.png" width="18" height="18" alt="" style="display:block;object-fit:contain">';
 
 
 // ==========================================
@@ -212,9 +212,8 @@ document.getElementById('confirmRedeem').addEventListener('click', async () => {
 // ==========================================
 // 4. FITUR UPLOAD FILE
 // ==========================================
-const MAX_FILE_BYTES = 2 * 1024 * 1024; // batas ukuran file
-const MAX_FILE_CHARS = 40000;               // batas isi yang dikirim ke AI (samakan dengan server)
-const TEXT_EXTS = new Set(['txt','md','markdown','js','mjs','cjs','ts','jsx','tsx','json','html','htm','css','scss','py','csv','tsv','xml','yml','yaml','log','sql','java','c','h','cpp','cs','go','rs','php','rb','sh','ini','toml','svg']);
+const MAX_FILE_CHARS = 40000; // batas isi yang dikirim ke AI (samakan dengan server)
+let fileReadToken = 0;       // membatalkan pembacaan file yang sudah tidak relevan
 
 const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const FILE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></svg>';
@@ -231,50 +230,55 @@ function renderFileChip() {
   if (!chip) return;
   const f = state.attachedFile;
   if (!f) { chip.hidden = true; chip.innerHTML = ''; return; }
-  const meta = `${formatBytes(f.size)}${f.truncated ? ` · hanya ${MAX_FILE_CHARS.toLocaleString('id-ID')} karakter pertama yang dibaca AI` : ''}`;
+  const kind = f.kind && f.kind !== 'txt' ? `${String(f.kind).toUpperCase()} · ` : '';
+  const meta = f.loading
+    ? (f.status || 'Membaca file…')
+    : `${kind}${formatBytes(f.size)}${f.truncated ? ` · hanya ${MAX_FILE_CHARS.toLocaleString('id-ID')} karakter pertama yang dibaca AI` : ''}`;
   chip.hidden = false;
   chip.innerHTML = `${FILE_ICON}
     <div class="file-chip-info"><span class="file-chip-name">${escHtml(f.name)}</span><span class="file-chip-meta">${escHtml(meta)}</span></div>
-    <button type="button" class="icon-btn" id="removeFileBtn" aria-label="Hapus file terlampir">
+    <button type="button" class="icon-btn" id="removeFileBtn" aria-label="${f.loading ? 'Batalkan' : 'Hapus file terlampir'}">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>`;
   document.getElementById('removeFileBtn').addEventListener('click', clearAttachedFile);
 }
 
 function clearAttachedFile() {
+  fileReadToken++; // batalkan pembacaan yang masih berjalan
   state.attachedFile = null;
   renderFileChip();
 }
 
-window.handleFileUpload = function(event) {
+// Pembacaan file ditangani library filereader.js (PDF, Word, Excel, PowerPoint, ODF, RTF, teks/kode)
+window.handleFileUpload = async function(event) {
   const input = event.target;
   const file = input.files[0];
   input.value = ''; // supaya file yang sama bisa dipilih ulang
   if (!file) return;
+  if (!window.DeepFileReader) { alert('Pembaca file belum termuat. Muat ulang halaman lalu coba lagi.'); return; }
 
-  const ext = (file.name.split('.').pop() || '').toLowerCase();
-  if (!TEXT_EXTS.has(ext)) {
-    alert('Format file ini belum didukung. Yang bisa: file teks/kode seperti .txt, .md, .json, .csv, .js, .py, .html, .css, dll. (PDF dan Word belum bisa dibaca.)');
-    return;
-  }
-  if (file.size > MAX_FILE_BYTES) {
-    alert('File terlalu besar. Maksimal 2 MB.');
-    return;
-  }
+  const token = ++fileReadToken;
+  state.attachedFile = { name: file.name, size: file.size, text: '', loading: true, status: 'Membaca file…', announced: false };
+  renderFileChip();
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    let text = String(reader.result || '');
-    if (text.includes('\u0000')) { alert('File ini bukan file teks yang bisa dibaca.'); return; }
-    if (!text.trim()) { alert('File kosong.'); return; }
-    const truncated = text.length > MAX_FILE_CHARS;
-    if (truncated) text = text.slice(0, MAX_FILE_CHARS);
-    state.attachedFile = { name: file.name, size: file.size, text, truncated, announced: false };
-    renderFileChip();
-    document.getElementById('input')?.focus();
-  };
-  reader.onerror = () => alert('Gagal membaca file.');
-  reader.readAsText(file);
+  try {
+    const r = await DeepFileReader.read(file, {
+      maxChars: MAX_FILE_CHARS,
+      onProgress: (msg) => {
+        if (token !== fileReadToken || !state.attachedFile) return;
+        state.attachedFile.status = msg;
+        renderFileChip();
+      }
+    });
+    if (token !== fileReadToken) return; // user sudah menghapus / mengganti file
+    state.attachedFile = { name: file.name, size: file.size, text: r.text, truncated: r.truncated, kind: r.kind, announced: false };
+  } catch (e) {
+    if (token !== fileReadToken) return;
+    state.attachedFile = null;
+    alert(e && e.message ? e.message : 'Gagal membaca file.');
+  }
+  renderFileChip();
+  document.getElementById('input')?.focus();
 };
 
 // ==========================================
@@ -414,6 +418,7 @@ async function sendMessage() {
   const input = document.getElementById('input');
   const text = input.value.trim();
   const isFree = modelById(state.model).free;
+  if (state.attachedFile && state.attachedFile.loading) return; // tunggu file selesai dibaca
   if (!text || state.isTyping || (!isFree && state.credits[state.currentModelType] <= 0)) return;
 
   const af = state.attachedFile;
@@ -421,93 +426,110 @@ async function sendMessage() {
   if (af) af.announced = true;
   addMessage('user', text, true, null, announceName);
   input.value = ''; input.style.height = 'auto';
-  
+
   state.isTyping = true;
-  document.getElementById('typingIndicator').classList.add('active');
-  document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+  const box = document.getElementById('messages');
+  box.scrollTop = box.scrollHeight;
+
+  // Gelembung jawaban dibuat langsung (tanpa animasi loading) lalu diisi bertahap saat teks mengalir
+  const usedModel = state.model;
+  const msgDiv = document.createElement('div');
+  msgDiv.className = 'message ai';
+  msgDiv.innerHTML = `
+    <div class="msg-avatar" style="--model-color:${modelById(usedModel).color}">${ARCH_LOGO}</div>
+    <div class="msg-content"></div>
+  `;
+  box.appendChild(msgDiv);
+  const bubbleEl = msgDiv.querySelector('.msg-content');
+
+  let fullText = '';
+  let streamError = null;
+  let raf = null;
+
+  const paint = () => {
+    raf = null;
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    // blok kode yang belum ditutup ditutup sementara supaya tampil rapi saat streaming
+    const open = (fullText.match(/```/g) || []).length % 2 === 1;
+    bubbleEl.innerHTML = formatMessage(open ? fullText + '\n```' : fullText);
+    if (nearBottom) box.scrollTop = box.scrollHeight;
+  };
+  const schedulePaint = () => { if (!raf) raf = requestAnimationFrame(paint); };
 
   try {
     let cleanMessages = state.messages
       .filter(msg => !msg.content.startsWith('Error:'))
       .map(msg => ({ role: msg.role === 'ai' ? 'assistant' : 'user', content: msg.content }));
-
     if (cleanMessages.length > 0 && cleanMessages[0].role === 'assistant') cleanMessages.shift();
-
-    const persona = state.persona;
-    const usedModel = state.model;
 
     const res = await fetch('/api/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        messages: cleanMessages, 
-        model: state.model,
-        persona: persona,
+      body: JSON.stringify({
+        messages: cleanMessages,
+        model: usedModel,
+        persona: state.persona,
         fileContext: af ? af.text : '',
         fileName: af ? af.name : '',
         skills: activeSkills()
       })
     });
-    
+
     if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.error || 'Gagal menghubungi server');
+      let msg = 'Gagal menghubungi server';
+      try { msg = (await res.json()).error || msg; } catch (e) {}
+      throw new Error(msg);
     }
 
-    // Streaming Reader
-    document.getElementById('typingIndicator').classList.remove('active');
-    const welcome = document.getElementById('welcome');
-    if (welcome) welcome.style.display = 'none';
-
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `message ai`;
-    const bubbleId = 'stream-' + Date.now();
-    
-    const archLogo = ARCH_LOGO;
-    
-    msgDiv.innerHTML = `
-      <div class="msg-avatar" style="--model-color:${modelById(usedModel).color}">${archLogo}</div>
-      <div class="msg-content" id="${bubbleId}"></div>
-    `;
-    
-    document.getElementById('messages').appendChild(msgDiv);
-    const bubbleEl = document.getElementById(bubbleId);
-
-    let fullText = "";
     const contentType = res.headers.get('content-type') || '';
-
     if (contentType.includes('application/json')) {
-      // Server membalas JSON biasa: { reply: "..." }
-      const data = await res.json();
-      fullText = data.reply || '';
-      bubbleEl.innerHTML = formatMessage(fullText);
+      // Cadangan: server membalas JSON utuh { reply }
+      fullText = (await res.json()).reply || '';
+      paint();
     } else {
-      // Cadangan kalau suatu saat server diubah jadi streaming (SSE)
+      // Streaming SSE: baris "data: {...}" berisi { delta } / { error } / { done }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buf = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const handleLine = (line) => {
+        line = line.trim();
+        if (!line.startsWith('data:')) return;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        let data;
+        try { data = JSON.parse(payload); } catch (e) { return; }
+        if (data.error) streamError = data.error;
+        else if (data.delta) { fullText += data.delta; schedulePaint(); }
+      };
 
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.text) {
-                fullText += data.text;
-                bubbleEl.innerHTML = formatMessage(fullText);
-              }
-            } catch (e) {}
-          }
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(handleLine);
         }
+        buf += decoder.decode();
+        if (buf) handleLine(buf);
+      } catch (e) {
+        streamError = streamError || 'Koneksi terputus saat menerima jawaban.';
       }
     }
-    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+
+    if (raf) cancelAnimationFrame(raf);
+    paint();
+
+    if (!fullText) throw new Error(streamError || 'Balasan kosong dari server.');
+
+    if (streamError) {
+      bubbleEl.insertAdjacentHTML('beforeend', `<br><br><em>Jawaban terputus: ${escHtml(streamError)}</em>`);
+    }
 
     state.messages.push({ role: 'ai', content: fullText, model: usedModel });
     saveChatToLocal();
-    
+
     msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         navigator.clipboard.writeText(btn.getAttribute('data-code'));
@@ -516,10 +538,11 @@ async function sendMessage() {
       });
     });
 
-    await fetchCredits(); 
+    await fetchCredits();
 
   } catch (err) {
-    document.getElementById('typingIndicator').classList.remove('active');
+    if (raf) cancelAnimationFrame(raf);
+    msgDiv.remove();
     addMessage('ai', `Error: ${err.message}`);
   } finally {
     state.isTyping = false;
@@ -558,7 +581,7 @@ document.getElementById('newChatBtn').addEventListener('click', () => {
   document.getElementById('messages').innerHTML = `
     <div class="welcome" id="welcome">
       <div class="welcome-icon glass">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 22H8C8 18 10 15 12 15C14 15 16 18 16 22H22L12 2Z" fill="currentColor"/><path d="M6.5 16L9 10L7 8L4 14L6.5 16Z" fill="var(--bg-base)"/></svg>
+        <img src="logo.png" width="38" height="38" alt="DeepChat" style="object-fit:contain">
       </div>
       <h2>Selamat datang di DeepChat</h2>
       <p>Pilih model di sidebar, upload file, atau atur persona di setting.</p>
