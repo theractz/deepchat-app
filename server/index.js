@@ -4,11 +4,12 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const Database = require('better-sqlite3');
 const cookieParser = require('cookie-parser');
+const admin = require('firebase-admin');
 require('dotenv').config();
 
-const admin = require('firebase-admin');
-
-// Di Railway: baca dari environment variable. Di laptop: baca dari file.
+// ==========================================
+// 0. SETUP FIREBASE ADMIN
+// ==========================================
 const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
   ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
   : require('./serviceAccountKey.json');
@@ -17,11 +18,28 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 
+// Middleware Verifikasi Token (Wajib buat endpoint yang butuh login)
+async function verifyFirebaseToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Akses ditolak. Silakan login.' });
+  }
+  const idToken = authHeader.split('Bearer ')[1];
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    req.user = decodedToken; // Dapet uid, email, dll
+    next();
+  } catch (error) {
+    console.error('Token Error:', error);
+    res.status(401).json({ error: 'Sesi login tidak valid. Silakan login ulang.' });
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==========================================
-// 1. SETUP DATABASE (ANTI HILANG DI RAILWAY)
+// 1. SETUP DATABASE (PAKAI UID, BUKAN IP)
 // ==========================================
 const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'database.sqlite') 
@@ -30,26 +48,28 @@ const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH
 console.log(`Menggunakan database di: ${dbPath}`);
 const db = new Database(dbPath);
 
+// HAPUS tabel lama kalau ada (karena struktur berubah dari ip ke uid)
 db.exec(`
-  CREATE TABLE IF NOT EXISTS users (ip TEXT PRIMARY KEY, deepseek_limit INTEGER DEFAULT 5, gpt_limit INTEGER DEFAULT 0, glm_limit INTEGER DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS users (uid TEXT PRIMARY KEY, email TEXT, deepseek_limit INTEGER DEFAULT 5, gpt_limit INTEGER DEFAULT 0, glm_limit INTEGER DEFAULT 0);
   CREATE TABLE IF NOT EXISTS redeem_codes (code TEXT PRIMARY KEY, deepseek_amount INTEGER DEFAULT 0, gpt_amount INTEGER DEFAULT 0, glm_amount INTEGER DEFAULT 0, is_used BOOLEAN DEFAULT 0);
 `);
 
-// Kuota gratis harian per IP untuk model DeepSeek Lite (Groq)
-db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (ip TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (ip, day));`);
+// Kuota gratis harian per UID
+db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (uid TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, day));`);
 const LITE_DAILY_QUOTA = 20;
 const todayWIB = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
-function reserveLite(ip) {
+function reserveLite(uid) {
   const day = todayWIB();
-  db.prepare('INSERT OR IGNORE INTO lite_usage (ip, day, count) VALUES (?, ?, 0)').run(ip, day);
-  const r = db.prepare('UPDATE lite_usage SET count = count + 1 WHERE ip = ? AND day = ? AND count < ?').run(ip, day, LITE_DAILY_QUOTA);
+  db.prepare('INSERT OR IGNORE INTO lite_usage (uid, day, count) VALUES (?, ?, 0)').run(uid, day);
+  const r = db.prepare('UPDATE lite_usage SET count = count + 1 WHERE uid = ? AND day = ? AND count < ?').run(uid, day, LITE_DAILY_QUOTA);
   return r.changes > 0 ? day : null;
 }
-function refundLite(ip, day) {
-  db.prepare('UPDATE lite_usage SET count = MAX(count - 1, 0) WHERE ip = ? AND day = ?').run(ip, day);
+function refundLite(uid, day) {
+  db.prepare('UPDATE lite_usage SET count = MAX(count - 1, 0) WHERE uid = ? AND day = ?').run(uid, day);
 }
 
+// (Kode default redeem_codes tetap sama)
 const checkCodes = db.prepare('SELECT COUNT(*) as count FROM redeem_codes').get();
 if (checkCodes.count === 0) {
   const insertCode = db.prepare('INSERT INTO redeem_codes (code, deepseek_amount, gpt_amount, glm_amount) VALUES (?, ?, ?, ?)');
@@ -78,7 +98,7 @@ function buildSkillsPrompt(skills) {
     parts.push(`### Skill: ${name}\n${desc ? `Kapan dipakai: ${desc}\n` : ''}${body}`);
   }
   if (parts.length === 0) return '';
-  return `SKILL AKTIF:\nGunakan skill di bawah hanya jika relevan dengan permintaan user. Jika instruksi skill meminta format atau panjang jawaban tertentu, ikuti skill tersebut.\n\n${parts.join('\n\n')}`;
+  return `SKILL AKTIF:\nGunakan skill di bawah hanya jika relevan dengan permintaan user.\n\n${parts.join('\n\n')}`;
 }
 
 const ALLOWED_MODELS = {
@@ -94,25 +114,17 @@ const ALLOWED_MODELS = {
 // 3. MIDDLEWARE & ROUTING
 // ==========================================
 app.use(cors());
-app.use(express.json({ limit: '20mb' })); // Limit dinaikkan buat file upload
+app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.set('trust proxy', 1);
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'landing.html'));
-});
-
-app.get('/admin-login.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin-login.html'));
-});
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
+app.get('/admin-login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin-login.html')));
 
 const isAdmin = (req, res, next) => {
-  if (req.cookies.admin_session === process.env.ADMIN_PASS) {
-    next(); 
-  } else {
-    res.redirect('/admin-login.html');
-  }
+  if (req.cookies.admin_session === process.env.ADMIN_PASS) next(); 
+  else res.redirect('/admin-login.html');
 };
 
 app.post('/api/admin/login', (req, res) => {
@@ -130,147 +142,102 @@ app.post('/api/admin/logout', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/panel-rahasia', isAdmin, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
-});
+app.get('/panel-rahasia', isAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
 app.post('/api/admin/generate', isAdmin, (req, res) => {
   try {
     const { code, model, amount } = req.body;
     if (!code || !model || !amount) return res.status(400).json({ error: 'Data tidak lengkap.' });
-
-    let deepseek_amt = 0, gpt_amt = 0, glm_amt = 0;
-    if (model === 'deepseek') deepseek_amt = amount;
-    else if (model === 'gpt') gpt_amt = amount;
-    else if (model === 'glm') glm_amt = amount;
-
-    db.prepare('INSERT INTO redeem_codes (code, deepseek_amount, gpt_amount, glm_amount) VALUES (?, ?, ?, ?)')
-      .run(code, deepseek_amt, gpt_amt, glm_amt);
-
-    res.json({ message: 'Kode berhasil dibuat!', code: code });
+    let ds = 0, gpt = 0, glm = 0;
+    if (model === 'deepseek') ds = amount;
+    else if (model === 'gpt') gpt = amount;
+    else if (model === 'glm') glm = amount;
+    db.prepare('INSERT INTO redeem_codes (code, deepseek_amount, gpt_amount, glm_amount) VALUES (?, ?, ?, ?)').run(code, ds, gpt, glm);
+    res.json({ message: 'Kode berhasil dibuat!', code });
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-      return res.status(400).json({ error: 'Kode ini sudah ada. Coba nama lain.' });
-    }
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(400).json({ error: 'Kode sudah ada.' });
     res.status(500).json({ error: 'Gagal membuat kode.' });
   }
 });
 
 // ==========================================
-// 4. RATE LIMIT & CHAT AI
+// 4. CHAT AI (WAJIB LOGIN - PAKAI UID)
 // ==========================================
-const guestLimiter = rateLimit({
-  windowMs: 24 * 60 * 60 * 1000, 
-  max: 50, 
-  message: { error: 'Terlalu banyak request. Coba lagi besok.' }
-});
+const guestLimiter = rateLimit({ windowMs: 24 * 60 * 60 * 1000, max: 50, message: { error: 'Terlalu banyak request.' } });
 
-app.post('/api/chat', guestLimiter, async (req, res) => {
-  const ip = req.ip;
+app.post('/api/chat', verifyFirebaseToken, guestLimiter, async (req, res) => {
+  const uid = req.user.uid;
+  const email = req.user.email;
   let liteDay = null; 
+  
   try {
-    // TANGKAP fileName DARI FRONTEND
     const { messages, model, persona, fileContext, fileName, skills } = req.body; 
-
     const modelConfig = ALLOWED_MODELS[model];
-    if (!modelConfig) {
-      return res.status(400).json({ error: 'Model tidak tersedia.' });
-    }
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'Pesan kosong.' });
-    }
+    if (!modelConfig) return res.status(400).json({ error: 'Model tidak tersedia.' });
+    if (!Array.isArray(messages) || messages.length === 0) return res.status(400).json({ error: 'Pesan kosong.' });
+
     const modelType = modelConfig.type;
     const cost = modelConfig.cost;
     const isGroq = modelConfig.provider === 'groq';
 
-    if (isGroq) {
-      if (!process.env.GROQ_API_KEY) {
-        return res.status(500).json({ error: 'DeepSeek Lite belum dikonfigurasi di server (Groq API Key missing).' });
-      }
-      liteDay = reserveLite(ip);
-      if (!liteDay) {
-        return res.status(403).json({ error: `Kuota gratis DeepSeek Lite hari ini habis (${LITE_DAILY_QUOTA}/hari). Coba lagi besok.` });
-      }
-    } else {
-      let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
-      if (!user) {
-        db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
-        user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
-      }
-      const currentLimit = user[`${modelType}_limit`];
-      if (currentLimit < cost) {
-        return res.status(403).json({ error: `Limit ${modelType.toUpperCase()} habis. Silakan tukar kode.` });
-      }
+    // Cek User berdasarkan UID
+    let user = db.prepare('SELECT * FROM users WHERE uid = ?').get(uid);
+    if (!user) {
+      db.prepare('INSERT INTO users (uid, email) VALUES (?, ?)').run(uid, email);
+      user = db.prepare('SELECT * FROM users WHERE uid = ?').get(uid);
     }
 
-    // --- SUSUN PESAN UNTUK AI ---
+    if (isGroq) {
+      if (!process.env.GROQ_API_KEY) return res.status(500).json({ error: 'Groq API Key missing.' });
+      liteDay = reserveLite(uid);
+      if (!liteDay) return res.status(403).json({ error: `Kuota gratis Lite habis.` });
+    } else {
+      const currentLimit = user[`${modelType}_limit`];
+      if (currentLimit < cost) return res.status(403).json({ error: `Limit habis. Silakan tukar kode.` });
+    }
+
+    // Susun Prompt
     let finalMessages = [];
-    
-    // Identitas Model
     let modelName = "DeepSeek V4.1 Flash"; 
-    if (model === 'deepseek-lite') modelName = "DeepSeek Lite (Gratis)";
+    if (model === 'deepseek-lite') modelName = "DeepSeek Lite";
     else if (model.includes('v4-flash')) modelName = "DeepSeek V4 Flash";
     else if (model.includes('v4-pro')) modelName = "DeepSeek V4 Pro";
     else if (model.includes('gpt')) modelName = "GPT-6 Luna";
     else if (model.includes('glm')) modelName = "GLM-5.3 Flash";
 
-    if (persona && persona.trim() !== "") {
-      finalMessages.push({ role: "system", content: `Kamu adalah AI dengan persona: ${persona}.` });
-    }
-
-    finalMessages.push({
-      role: "system",
-      content: `ATURAN MENJAWAB (WAJIB DIPATUHI):
-      1. IDENTITAS: Kamu adalah **${modelName}**, model AI yang sangat canggih. Kamu bangga dengan kemampuanmu!
-      2. TRANSPARANSI: Jika ditanya "Kamu model apa?", jawablah dengan bangga bahwa kamu adalah ${modelName}. Jangan mengaku sebagai model lain.
-      3. GAYA BAHASA: Santai, asik, natural (gw/lu atau aku/kamu).
-      4. EMOJI: Pakai jika suasananya santai.
-      5. ATURAN MENJAWAB: Singkat, padat, to the point. Tanpa basa-basi.
-      6. Kodingan: Langsung kasih blok kodenya.
-      7. Jangan ulangi pertanyaan user.`
-    });
+    if (persona) finalMessages.push({ role: "system", content: `Persona: ${persona}` });
+    finalMessages.push({ role: "system", content: `IDENTITAS: Kamu adalah ${modelName}. Gaya bahasa santai, to the point.` });
 
     const skillsPrompt = buildSkillsPrompt(skills);
     if (skillsPrompt) finalMessages.push({ role: "system", content: skillsPrompt });
 
-    // TAMBAHKAN NAMA FILE KE KONTEKS
-    if (fileContext && fileContext.trim() !== "") {
+    if (fileContext) {
       const fileLabel = fileName ? `File: ${fileName}\n` : '';
-      finalMessages.push({ 
-        role: "system", 
-        content: `Berikut adalah isi file/dokumen yang diupload user:\n${fileLabel}---\n${fileContext}\n---` 
-      });
+      finalMessages.push({ role: "system", content: `Konteks file:\n${fileLabel}---\n${fileContext}\n---` });
     }
 
     finalMessages = finalMessages.concat(messages);
 
-    // --- TEMBAK API ---
+    // Tembak API
     const upstream = isGroq
       ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY, model: modelConfig.upstreamModel, name: 'Groq' }
       : { url: `${process.env.VIKEY_BASE_URL}/chat/completions`, key: process.env.VIKEY_API_KEY, model: model, name: 'Vikey' };
 
     const apiResponse = await fetch(upstream.url, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': `Bearer ${upstream.key}` 
-      },
-      body: JSON.stringify({ 
-        model: upstream.model, 
-        messages: finalMessages, 
-        max_tokens: 6000, 
-        temperature: 0.7 
-      })
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${upstream.key}` },
+      body: JSON.stringify({ model: upstream.model, messages: finalMessages, max_tokens: 6000, temperature: 0.7 })
     });
 
     const data = await apiResponse.json();
-    if (!apiResponse.ok) throw new Error(data.error?.message || `Gagal memanggil API ${upstream.name}`);
+    if (!apiResponse.ok) throw new Error(data.error?.message || `Gagal memanggil ${upstream.name}`);
 
     const reply = data.choices?.[0]?.message?.content;
-    if (typeof reply !== 'string') throw new Error(`Balasan dari API ${upstream.name} tidak valid.`);
+    if (typeof reply !== 'string') throw new Error(`Balasan ${upstream.name} tidak valid.`);
 
     if (!isGroq) {
-      db.prepare(`UPDATE users SET ${modelType}_limit = ${modelType}_limit - ? WHERE ip = ?`).run(cost, ip);
+      // POTONG LIMIT BERDASARKAN UID
+      db.prepare(`UPDATE users SET ${modelType}_limit = MAX(${modelType}_limit - ?, 0) WHERE uid = ?`).run(cost, uid);
     }
     liteDay = null; 
     
@@ -278,47 +245,53 @@ app.post('/api/chat', guestLimiter, async (req, res) => {
 
   } catch (error) {
     console.error('Chat Error:', error);
-    if (liteDay) refundLite(ip, liteDay); 
+    if (liteDay) refundLite(uid, liteDay); 
     res.status(500).json({ error: error.message });
   }
 });
 
 // ==========================================
-// 5. ENDPOINT CEK LIMIT & REDEEM
+// 5. CEK LIMIT & REDEEM (WAJIB LOGIN - PAKAI UID)
 // ==========================================
-app.get('/api/credits', (req, res) => {
-  const ip = req.ip;
-  let user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
+app.get('/api/credits', verifyFirebaseToken, (req, res) => {
+  const uid = req.user.uid;
+  let user = db.prepare('SELECT * FROM users WHERE uid = ?').get(uid);
   if (!user) {
-    db.prepare('INSERT INTO users (ip) VALUES (?)').run(ip);
-    user = db.prepare('SELECT * FROM users WHERE ip = ?').get(ip);
+    db.prepare('INSERT INTO users (uid, email) VALUES (?, ?)').run(uid, req.user.email);
+    user = db.prepare('SELECT * FROM users WHERE uid = ?').get(uid);
   }
   res.json({ deepseek: user.deepseek_limit, gpt: user.gpt_limit, glm: user.glm_limit });
 });
 
-app.post('/api/redeem', (req, res) => {
+app.post('/api/redeem', verifyFirebaseToken, (req, res) => {
   try {
     const { code } = req.body;
-    const ip = req.ip;
+    const uid = req.user.uid;
     if (!code) return res.status(400).json({ error: 'Kode wajib diisi.' });
 
     const upperCode = String(code).toUpperCase();
 
     const redeemTx = db.transaction(() => {
-      const mark = db.prepare('UPDATE redeem_codes SET is_used = 1 WHERE code = ? AND is_used = 0').run(upperCode);
-      if (mark.changes === 0) return null;
+      // Cek dulu kodenya ada & belum dipakai
+      const voucher = db.prepare('SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0').get(upperCode);
+      if (!voucher) return null;
 
-      const voucher = db.prepare('SELECT * FROM redeem_codes WHERE code = ?').get(upperCode);
-      db.prepare('INSERT OR IGNORE INTO users (ip) VALUES (?)').run(ip);
-      db.prepare(`UPDATE users SET deepseek_limit = deepseek_limit + ?, gpt_limit = gpt_limit + ?, glm_limit = glm_limit + ? WHERE ip = ?`)
-        .run(voucher.deepseek_amount, voucher.gpt_amount, voucher.glm_amount, ip);
+      // Tandai dipakai
+      db.prepare('UPDATE redeem_codes SET is_used = 1 WHERE code = ?').run(upperCode);
+      
+      // Pastikan user ada
+      db.prepare('INSERT OR IGNORE INTO users (uid, email) VALUES (?, ?)').run(uid, req.user.email);
+      
+      // TAMBAH LIMIT (PAKAI UID)
+      db.prepare(`UPDATE users SET deepseek_limit = deepseek_limit + ?, gpt_limit = gpt_limit + ?, glm_limit = glm_limit + ? WHERE uid = ?`)
+        .run(voucher.deepseek_amount, voucher.gpt_amount, voucher.glm_amount, uid);
       return voucher;
     });
 
     const voucher = redeemTx();
     if (!voucher) return res.status(400).json({ error: 'Kode tidak valid atau sudah dipakai.' });
 
-    res.json({ message: 'Kode berhasil!', added: { deepseek: voucher.deepseek_amount, gpt: voucher.gpt_amount, glm: voucher.glm_amount } });
+    res.json({ message: 'Berhasil!', added: { deepseek: voucher.deepseek_amount, gpt: voucher.gpt_amount, glm: voucher.glm_amount } });
   } catch (error) {
     console.error('Redeem Error:', error);
     res.status(500).json({ error: 'Terjadi kesalahan server.' });
