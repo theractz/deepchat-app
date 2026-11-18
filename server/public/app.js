@@ -12,6 +12,8 @@ const state = {
   authReady: false,    // true setelah Firebase selesai memeriksa sesi
   authError: false,    // true kalau SDK Firebase gagal dimuat
   loggingIn: false,    // popup login sedang terbuka
+  uid: undefined,      // uid akun yang tampil sekarang (undefined = belum diperiksa, null = logout)
+  run: 0,              // penanda tampilan chat; naik setiap tampilan diganti (chat baru, buka riwayat, ganti akun)
 };
 
 // Daftar model: satu sumber untuk dropdown, label limit, dan warna avatar AI.
@@ -134,7 +136,7 @@ function initAuth() {
     started = true;
     clearTimeout(timer);
     window.firebaseSDK.onAuthStateChanged(window.firebaseAuth, async (user) => {
-      state.user = user;
+      handleAccountChange(user);
       try { currentUserToken = user ? await user.getIdToken() : null; }
       catch (e) { currentUserToken = null; console.error('Gagal ambil token:', e); }
       state.authReady = true;
@@ -499,7 +501,7 @@ function addMessage(role, content, saveToHistory = true, modelId = null, fileNam
     <div class="msg-avatar" style="${role === 'ai' ? `--model-color:${modelById(modelId || state.model).color}` : ''}">
       ${role === 'user' ? userLogo : archLogo}
     </div>
-    <div class="msg-content">${role === 'ai' ? formatMessage(content) : (fileName ? `<div class="msg-file">${FILE_ICON}<span>${escHtml(fileName)}</span></div><br>` : '') + content}</div>
+    <div class="msg-content">${role === 'ai' ? formatMessage(content) : (fileName ? `<div class="msg-file">${FILE_ICON}<span>${escHtml(fileName)}</span></div><br>` : '') + escHtml(content).replace(/\n/g, '<br>')}</div>
   `;
   
   if (role === 'ai') {
@@ -519,44 +521,174 @@ function addMessage(role, content, saveToHistory = true, modelId = null, fileNam
   if (saveToHistory) saveChatToLocal();
 }
 
-function saveChatToLocal() {
-  if (!state.currentChatId) state.currentChatId = Date.now().toString();
-  let allChats = JSON.parse(localStorage.getItem('deepchat_history') || '{}');
-  const firstUserMsg = state.messages.find(m => m.role === 'user');
-  const title = firstUserMsg ? firstUserMsg.content.substring(0, 30) + '...' : 'Chat Baru';
+// ---- Penyimpanan riwayat: satu kunci per akun, jadi akun lain tidak melihat percakapan ini ----
+const HISTORY_PREFIX = 'deepchat_history_';
+const LEGACY_HISTORY_KEY = 'deepchat_history'; // format lama: satu kunci dipakai semua akun
+// true  = saat logout / ganti akun, riwayat, persona, dan skill di perangkat ini ikut dihapus (bersih tanpa jejak)
+// false = riwayat tetap tersimpan per akun dan muncul lagi kalau akun yang sama login kembali
+const CLEAR_LOCAL_DATA_ON_LOGOUT = true;
 
-  allChats[state.currentChatId] = { id: state.currentChatId, title: title, messages: state.messages };
-  localStorage.setItem('deepchat_history', JSON.stringify(allChats));
+function historyKey(uid) {
+  const id = uid || (state.user && state.user.uid);
+  return id ? HISTORY_PREFIX + id : null;
+}
+
+function readHistory() {
+  const key = historyKey();
+  if (!key) return {};
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch (e) { return {}; }
+}
+
+function writeHistory(all) {
+  const key = historyKey();
+  if (!key) return false;
+  try { localStorage.setItem(key, JSON.stringify(all)); return true; }
+  catch (e) { console.error('Riwayat gagal disimpan:', e); return false; }
+}
+
+function wipeLocalUserData(uid) {
+  try {
+    if (uid) localStorage.removeItem(HISTORY_PREFIX + uid);
+    localStorage.removeItem('deepchat_persona');
+    localStorage.removeItem('deepchat_skills');
+  } catch (e) {}
+  state.persona = '';
+  if (typeof personaInput !== 'undefined' && personaInput) personaInput.value = '';
+  state.skills = [];
+  renderSkills();
+}
+
+function welcomeHTML() {
+  return `
+    <div class="welcome" id="welcome">
+      <div class="welcome-icon glass">
+        <img src="logo.png" width="38" height="38" alt="DeepChat" style="object-fit:contain">
+      </div>
+      <h2>Selamat datang di DeepChat</h2>
+      <p>Pilih model di sidebar, upload file, atau atur persona di setting.</p>
+    </div>`;
+}
+
+// Tampilan chat diganti: jawaban AI yang masih jalan tidak boleh menimpa tampilan baru
+function detachView() {
+  state.run++;
+  state.isTyping = false;
+}
+
+function resetChatView() {
+  detachView();
+  state.currentChatId = null;
+  state.messages = [];
+  clearAttachedFile();
+  document.getElementById('messages').innerHTML = welcomeHTML();
+}
+
+// Dipanggil setiap Firebase melaporkan perubahan akun (login, logout, ganti akun)
+function handleAccountChange(user) {
+  const prevUid = state.uid;
+  const newUid = user ? user.uid : null;
+  state.user = user;
+  if (prevUid !== undefined && prevUid !== newUid) {
+    if (prevUid && CLEAR_LOCAL_DATA_ON_LOGOUT) wipeLocalUserData(prevUid);
+    resetChatView();
+    const input = document.getElementById('input');
+    if (input) { input.value = ''; input.style.height = 'auto'; }
+  }
+  state.uid = newUid;
   renderHistory();
 }
+
+function persistChat(chatId, messages, onlyIfExists = false) {
+  const all = readHistory();
+  if (onlyIfExists && !all[chatId]) return; // chat sudah dihapus, jangan dihidupkan lagi
+  const first = messages.find(m => m.role === 'user');
+  const title = first ? (first.content.length > 30 ? first.content.substring(0, 30) + '...' : first.content) : 'Chat Baru';
+  all[chatId] = { id: chatId, title, messages };
+  writeHistory(all);
+  renderHistory();
+}
+
+function saveChatToLocal() {
+  if (!state.user) return; // tanpa login tidak ada yang disimpan
+  if (!state.currentChatId) state.currentChatId = Date.now().toString();
+  persistChat(state.currentChatId, state.messages);
+}
+
+const TRASH_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
 
 function renderHistory() {
   const list = document.getElementById('chatHistoryList');
   if (!list) return;
   list.innerHTML = '';
-  let allChats = JSON.parse(localStorage.getItem('deepchat_history') || '{}');
-  const sortedChats = Object.values(allChats).sort((a, b) => b.id - a.id);
+  const chats = Object.values(readHistory()).sort((a, b) => b.id - a.id);
 
-  sortedChats.forEach(chat => {
-    const div = document.createElement('button');
-    div.type = 'button';
-    div.className = 'history-item';
-    div.textContent = chat.title;
-    div.onclick = () => loadChat(chat.id);
-    list.appendChild(div);
+  const clearBtn = document.getElementById('clearHistoryBtn');
+  if (clearBtn) clearBtn.hidden = chats.length === 0;
+
+  if (chats.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'history-empty';
+    p.textContent = state.user ? 'Belum ada riwayat chat.' : 'Login untuk melihat riwayat chat.';
+    list.appendChild(p);
+    return;
+  }
+
+  chats.forEach(chat => {
+    const row = document.createElement('div');
+    row.className = 'history-row' + (chat.id === state.currentChatId ? ' active' : '');
+
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'history-item';
+    open.textContent = chat.title;
+    open.addEventListener('click', () => loadChat(chat.id));
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'history-del';
+    del.setAttribute('aria-label', `Hapus obrolan: ${chat.title}`);
+    del.title = 'Hapus obrolan';
+    del.innerHTML = TRASH_ICON;
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteChat(chat.id); });
+
+    row.append(open, del);
+    list.appendChild(row);
   });
 }
 
+function deleteChat(id) {
+  const all = readHistory();
+  const chat = all[id];
+  if (!chat) return;
+  if (!confirm(`Hapus obrolan "${chat.title}"? Tindakan ini tidak bisa dibatalkan.`)) return;
+  delete all[id];
+  writeHistory(all);
+  if (state.currentChatId === id) resetChatView();
+  renderHistory();
+}
+
+function clearAllHistory() {
+  if (Object.keys(readHistory()).length === 0) return;
+  if (!confirm('Hapus semua riwayat chat? Tindakan ini tidak bisa dibatalkan.')) return;
+  writeHistory({});
+  resetChatView();
+  renderHistory();
+}
+
 function loadChat(id) {
-  let allChats = JSON.parse(localStorage.getItem('deepchat_history') || '{}');
-  const chat = allChats[id];
+  const chat = readHistory()[id];
   if (!chat) return;
 
+  detachView();
   state.currentChatId = id;
   state.messages = [];
   document.getElementById('messages').innerHTML = '';
   clearAttachedFile(); // jangan bawa file dari chat lain
   chat.messages.forEach(msg => addMessage(msg.role, msg.content, false, msg.model, msg.file));
+  renderHistory();
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('active');
 }
@@ -575,34 +707,67 @@ async function sendMessage() {
   addMessage('user', text, true, null, announceName);
   input.value = ''; input.style.height = 'auto';
 
+  // Jawaban ini milik chat & akun yang mengirimnya, walau layar sudah pindah saat jawaban datang
+  const run = ++state.run;
+  const ctx = { uid: state.user.uid, chatId: state.currentChatId, messages: state.messages };
+  const stillHere = () => state.run === run;
   state.isTyping = true;
+
   const box = document.getElementById('messages');
   box.scrollTop = box.scrollHeight;
 
-  // Gelembung jawaban dibuat langsung (tanpa animasi loading) lalu diisi bertahap saat teks mengalir
+  // Gelembung jawaban: tiga titik selagi menunggu, lalu teks diketik bertahap
   const usedModel = state.model;
   const msgDiv = document.createElement('div');
   msgDiv.className = 'message ai';
   msgDiv.innerHTML = `
     <div class="msg-avatar" style="--model-color:${modelById(usedModel).color}">${ARCH_LOGO}</div>
-    <div class="msg-content"></div>
+    <div class="msg-content"><span class="typing-dots" role="status" aria-label="AI sedang mengetik"><i></i><i></i><i></i></span></div>
   `;
   box.appendChild(msgDiv);
   const bubbleEl = msgDiv.querySelector('.msg-content');
 
   let fullText = '';
   let streamError = null;
-  let raf = null;
+  let streamDone = false;
 
-  const paint = () => {
-    raf = null;
+  // ---- Animasi mengetik (berbasis waktu, jadi sama cepatnya di layar 60/120 Hz) ----
+  const reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  let shown = 0, lastN = -1, lastTs = 0, timer = null, finishTyping = null;
+
+  const render = (final) => {
+    let n = Math.floor(shown);
+    if (n > 0 && n < fullText.length) {
+      const c = fullText.charCodeAt(n - 1);
+      if (c >= 0xD800 && c <= 0xDBFF) n++; // jangan belah emoji
+    }
+    if (n === 0) return;
+    if (n === lastN && !final) return;
+    lastN = n;
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-    // blok kode yang belum ditutup ditutup sementara supaya tampil rapi saat streaming
-    const open = (fullText.match(/```/g) || []).length % 2 === 1;
-    bubbleEl.innerHTML = formatMessage(open ? fullText + '\n```' : fullText);
+    const part = fullText.slice(0, n);
+    // blok kode yang belum ditutup ditutup sementara supaya tampil rapi saat mengetik
+    const open = (part.match(/```/g) || []).length % 2 === 1;
+    bubbleEl.innerHTML = formatMessage(open ? part + '\n```' : part) + (final ? '' : '<span class="type-caret"></span>');
     if (nearBottom) box.scrollTop = box.scrollHeight;
   };
-  const schedulePaint = () => { if (!raf) raf = requestAnimationFrame(paint); };
+
+  const tick = () => {
+    timer = null;
+    if (!stillHere()) { if (finishTyping) finishTyping(); return; }
+    const now = performance.now();
+    const dt = lastTs ? now - lastTs : 16;
+    lastTs = now;
+    const len = fullText.length;
+    if (shown < len) {
+      const rate = reduceMotion ? 1e9 : Math.max(90, len / 4); // karakter/detik; jawaban panjang tetap selesai ±4 detik
+      shown = Math.min(len, shown + rate * dt / 1000);
+    }
+    if (streamDone && shown >= len) { render(true); if (finishTyping) finishTyping(); return; }
+    render(false);
+    timer = setTimeout(tick, 16);
+  };
+  const startTyping = () => { if (!timer) timer = setTimeout(tick, 16); };
 
   try {
     let cleanMessages = state.messages
@@ -630,9 +795,8 @@ async function sendMessage() {
 
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      // Cadangan: server membalas JSON utuh { reply }
+      // Server membalas JSON utuh { reply }: teks lalu diketik di sisi browser
       fullText = (await res.json()).reply || '';
-      paint();
     } else {
       // Streaming SSE: baris "data: {...}" berisi { delta } / { error } / { done }
       const reader = res.body.getReader();
@@ -647,7 +811,7 @@ async function sendMessage() {
         let data;
         try { data = JSON.parse(payload); } catch (e) { return; }
         if (data.error) streamError = data.error;
-        else if (data.delta) { fullText += data.delta; schedulePaint(); }
+        else if (data.delta) { fullText += data.delta; startTyping(); }
       };
 
       try {
@@ -666,34 +830,38 @@ async function sendMessage() {
       }
     }
 
-    if (raf) cancelAnimationFrame(raf);
-    paint();
-
+    streamDone = true;
     if (!fullText) throw new Error(streamError || 'Balasan kosong dari server.');
 
-    if (streamError) {
-      bubbleEl.insertAdjacentHTML('beforeend', `<br><br><em>Jawaban terputus: ${escHtml(streamError)}</em>`);
+    // Simpan dulu ke riwayat (walau layar sudah pindah chat), baru animasikan
+    ctx.messages.push({ role: 'ai', content: fullText, model: usedModel });
+    if (state.user && state.user.uid === ctx.uid) persistChat(ctx.chatId, ctx.messages, true);
+
+    if (stillHere()) {
+      await new Promise((resolve) => { finishTyping = resolve; startTyping(); });
     }
 
-    state.messages.push({ role: 'ai', content: fullText, model: usedModel });
-    saveChatToLocal();
-
-    msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        navigator.clipboard.writeText(btn.getAttribute('data-code'));
-        btn.textContent = 'Copied!';
-        setTimeout(() => btn.textContent = 'Copy', 1500);
+    if (stillHere()) {
+      if (streamError) {
+        bubbleEl.insertAdjacentHTML('beforeend', `<br><br><em>Jawaban terputus: ${escHtml(streamError)}</em>`);
+      }
+      msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          navigator.clipboard.writeText(btn.getAttribute('data-code'));
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = 'Copy', 1500);
+        });
       });
-    });
+    }
 
     await fetchCredits();
 
   } catch (err) {
-    if (raf) cancelAnimationFrame(raf);
+    if (timer) { clearTimeout(timer); timer = null; }
     msgDiv.remove();
-    addMessage('ai', `Error: ${err.message}`);
+    if (stillHere()) addMessage('ai', `Error: ${err.message}`);
   } finally {
-    state.isTyping = false;
+    if (state.run === run) state.isTyping = false;
   }
 }
 
@@ -723,21 +891,12 @@ document.getElementById('overlay').addEventListener('click', () => {
 });
 
 document.getElementById('newChatBtn').addEventListener('click', () => {
-  state.currentChatId = null;
-  state.messages = [];
-  clearAttachedFile();
-  document.getElementById('messages').innerHTML = `
-    <div class="welcome" id="welcome">
-      <div class="welcome-icon glass">
-        <img src="logo.png" width="38" height="38" alt="DeepChat" style="object-fit:contain">
-      </div>
-      <h2>Selamat datang di DeepChat</h2>
-      <p>Pilih model di sidebar, upload file, atau atur persona di setting.</p>
-    </div>
-  `;
+  resetChatView();
+  renderHistory();
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('active');
 });
+document.getElementById('clearHistoryBtn')?.addEventListener('click', clearAllHistory);
 
 document.getElementById('cartBtn').addEventListener('click', () => document.getElementById('cartModal').classList.add('active'));
 document.getElementById('closeCartBtn').addEventListener('click', () => document.getElementById('cartModal').classList.remove('active'));
@@ -964,6 +1123,7 @@ try {
   const saved = localStorage.getItem('deepchat_model');
   if (saved && MODELS.some(m => m.id === saved)) state.model = saved;
 } catch (e) {}
+try { localStorage.removeItem(LEGACY_HISTORY_KEY); } catch (e) {} // riwayat format lama dipakai bersama semua akun
 selectModel(state.model, false); // fetchCredits() baru jalan setelah user login
 renderAuthUI();
 initAuth();
