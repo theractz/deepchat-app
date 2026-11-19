@@ -437,3 +437,111 @@ main > .composer { width: calc(100% - 32px); }
   font-size: 0.8rem; color: var(--text-secondary); background: var(--bg-base); border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
 }
 .msg-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tambahkan di akhir style.css. Hanya memakai variabel yang sudah ada. */
+.credit-amount {
+  font-size: 1.2rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.msg-cost {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ---------- Usage & Billing ---------- */
+.sidebar-menu-btn { display:flex; align-items:center; gap:8px; width:100%; min-height:40px; padding:8px 12px; background:transparent; color:var(--text-primary); border:1px solid var(--border-glass); border-radius:var(--radius-sm); font-size:0.85rem; font-weight:500; cursor:pointer; transition:background var(--duration) var(--ease-out); }
+.sidebar-menu-btn:hover { background: var(--bg-elevated); }
+.billing-tab.active { background: var(--accent) !important; color: var(--on-accent) !important; border-color: var(--accent) !important; }
+.billing-content { display:flex; flex-direction:column; gap:10px; }
+.billing-content[hidden] { display:none; }
+.usage-table { width:100%; border-collapse:collapse; font-size:0.82rem; text-align:left; }
+.usage-table th { padding:8px; border-bottom:1px solid var(--border-glass); color:var(--text-muted); font-weight:500; }
+.usage-table td { padding:10px 8px; border-bottom:1px solid var(--border-glass); }
+.usage-table .text-red { color:var(--danger); font-weight:600; }
+
+/* ---- Riwayat chat: hapus obrolan ---- */
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.history-clear { background: none; border: 0; padding: 4px 6px; font: 500 0.75rem var(--font-sans); color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); }
+.history-clear:hover, .history-clear:focus-visible { color: var(--danger); }
+.history-clear[hidden] { display: none; }
+.history-row { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-sm); }
+.history-row.active { background: var(--bg-glass); }
+.history-row .history-item { flex: 1 1 auto; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-del { flex-shrink: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
+.history-del:hover, .history-del:focus-visible { color: var(--danger); }
+@media (hover: hover) {
+  .history-del { opacity: 0; }
+  .history-row:hover .history-del, .history-del:focus-visible { opacity: 1; }
+}
+.history-empty { font-size: 0.8rem; color: var(--text-muted); padding: 6px 4px; }
+
+/* ---- Animasi AI mengetik ---- */
+.typing-dots { display: inline-flex; align-items: center; gap: 5px; height: 1.4em; }
+.typing-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); animation: typingBounce 1.2s infinite ease-in-out; }
+.typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-5px); opacity: 1; } }
+.type-caret { display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: -0.15em; background: var(--accent); animation: caretBlink 1s steps(1) infinite; }
+@keyframes caretBlink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .typing-dots i, .type-caret { animation: none; } }
+
+/* ---------- Meter saldo kredit ---------- */
+.credit-meter { display: flex; flex-direction: column; gap: 6px; }
+.credit-meter-track {
+  height: 8px; overflow: hidden;
+  background: var(--bg-elevated); border: 1px solid var(--border-glass); border-radius: var(--radius-full);
+}
+.credit-meter-fill {
+  height: 100%; width: 0; background: var(--accent); border-radius: var(--radius-full);
+  transition: width 0.6s var(--ease-out), background var(--duration);
+}
+.credit-meter-note { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; }
+.credit-meter[data-level="low"] .credit-meter-fill { background: var(--danger); }
+.credit-meter[data-level="low"] .credit-meter-note { color: var(--danger); }
+.billing-summary { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+@media (prefers-reduced-motion: reduce) { .credit-meter-fill { transition: none; } }
+
+/* Pastikan tombol di sidebar bisa diklik */
+.credits-card, .sidebar-menu-btn, .new-chat-btn {
+  position: relative;
+  z-index: 10;
+}
+
+/* Perbaikan User Mini agar tidak ada kotak */
+.user-mini-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 6px 0;
+  transition: opacity var(--duration);
+}
+.user-mini-card:hover .logout-btn-mini { opacity: 1; }
+
+.user-avatar-mini {
+  width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; overflow: hidden;
+  background: var(--bg-elevated); color: var(--accent); font-weight: 600;
+  display: flex; align-items: center; justify-content: center; font-size: 0.8rem;
+}
+.user-avatar-mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.user-meta-mini {
+  min-width: 0; flex: 1; display: flex; flex-direction: column;
+}
+.user-name-mini {
+  font-size: 0.85rem; font-weight: 500; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.logout-btn-mini {
+  background: transparent; border: none; color: var(--text-muted); cursor: pointer;
+  padding: 6px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); transition: color var(--duration), background var(--duration);
+  opacity: 0.5; /* Redup kalau nggak di-hover */
+}
+.user-mini-card:hover .logout-btn-mini { opacity: 1; }
+.logout-btn-mini:hover { color: var(--danger); background: var(--bg-elevated); }

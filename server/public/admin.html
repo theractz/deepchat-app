@@ -39,17 +39,8 @@
     </div>
 
     <div class="form-group">
-      <label for="modelTarget">Model AI</label>
-      <select id="modelTarget">
-        <option value="deepseek">DeepSeek (V4 Flash, V4 Pro, V4.1 Flash)</option>
-        <option value="gpt">GPT-6 Luna</option>
-        <option value="glm">GLM-5.3 Flash</option>
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label for="tokenAmount">Jumlah limit (chat)</label>
-      <input type="number" id="tokenAmount" value="50" min="1">
+      <label for="tokenAmount">Jumlah kredit</label>
+      <input type="number" id="tokenAmount" value="10000" min="1">
     </div>
 
     <button class="btn-generate" id="generateBtn">Generate Kode Voucher</button>
@@ -71,7 +62,6 @@
     // Generate Token
     document.getElementById('generateBtn').addEventListener('click', async () => {
       const prefix = document.getElementById('tokenPrefix').value.trim();
-      const model = document.getElementById('modelTarget').value;
       const amount = parseInt(document.getElementById('tokenAmount').value);
 
       if (!prefix || !amount) return alert('Isi semua kolom!');
@@ -87,7 +77,7 @@
         const res = await fetch('/api/admin/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: finalCode, model, amount })
+          body: JSON.stringify({ code: finalCode, amount })
         });
 
         const data = await res.json();
