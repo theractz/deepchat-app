@@ -84,8 +84,8 @@ function getOrCreateUser(uid, email) {
 // 2. DAFTAR MODEL & HARGA (SESUAI VIKEY)
 // ==========================================
 const MAX_SKILLS = 3;
-const MAX_SKILL_CHARS = 6000;
-const MAX_SKILL_TOTAL = 12000;
+const MAX_SKILL_CHARS = 100000;
+const MAX_SKILL_TOTAL = 120000;
 const MAX_FILE_CONTEXT_CHARS = 40000; 
 const MAX_PERSONA_CHARS = 1000;
 const MAX_HISTORY_MESSAGES = 6;
@@ -195,6 +195,7 @@ app.post('/api/admin/generate', isAdmin, (req, res) => {
   try {
     const prefix = String(req.body?.prefix || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24);
     const qty = Number(req.body?.amount);
+    if (req.body?.code && !req.body?.prefix) return res.status(400).json({ error: 'admin.html versi lama. Ganti dengan admin.html terbaru, lalu refresh (Ctrl+F5).' });
     if (!prefix || !Number.isInteger(qty) || qty < 1) return res.status(400).json({ error: 'Data tidak lengkap.' });
     const code = `${prefix}-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
     db.prepare('INSERT INTO redeem_codes (code, credit_amount) VALUES (?, ?)').run(code, qty);
@@ -267,7 +268,7 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
     const apiResponse = await fetch(upstream.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${upstream.key}` },
-      body: JSON.stringify({ model: upstream.model, messages: finalMessages, max_tokens: 6000, temperature: 0.7 }),
+      body: JSON.stringify({ model: upstream.model, messages: finalMessages, max_tokens: 10000, temperature: 0.7 }),
       signal: AbortSignal.timeout(120000)
     });
 
