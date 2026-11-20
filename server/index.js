@@ -300,6 +300,13 @@ app.post('/api/midtrans/notification', express.json(), (req, res) => {
   try {
     const notification = req.body || {};
     const orderId = notification.order_id;
+
+    // [MIDTRANS] Handle request test dari dashboard Midtrans
+    if (orderId && String(orderId).startsWith('payment_notif_test_')) {
+      console.log('Menerima tes notifikasi dari Midtrans:', orderId);
+      return res.status(200).json({ status: 'success test' }); 
+    }
+
     const statusCode = notification.status_code;
     const grossAmount = notification.gross_amount;
     const serverKey = process.env.MIDTRANS_SERVER_KEY;
