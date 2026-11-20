@@ -36,7 +36,9 @@
     xlsx: 'sheet', xlsm: 'sheet', xlsb: 'sheet', xls: 'sheet', ods: 'sheet',
     pptx: 'pptx',
     odt: 'odf', odp: 'odf',
-    rtf: 'rtf'
+    rtf: 'rtf',
+    png: 'image', jpg: 'image', jpeg: 'image', webp: 'image', bmp: 'image', gif: 'image',
+    mp3: 'audio', wav: 'audio', m4a: 'audio', ogg: 'audio', flac: 'audio', webm: 'audio', mp4: 'audio', mpeg: 'audio', mpga: 'audio'
   };
 
   const UNSUPPORTED = {
@@ -45,16 +47,14 @@
     pages: 'File Pages belum didukung. Ekspor dulu ke PDF atau .docx.',
     numbers: 'File Numbers belum didukung. Ekspor dulu ke .xlsx atau .csv.',
     key: 'File Keynote belum didukung. Ekspor dulu ke PDF atau .pptx.',
-    png: 'Gambar belum didukung karena butuh OCR. Salin teksnya ke file .txt dulu.',
-    jpg: 'Gambar belum didukung karena butuh OCR. Salin teksnya ke file .txt dulu.',
-    jpeg: 'Gambar belum didukung karena butuh OCR. Salin teksnya ke file .txt dulu.',
-    gif: 'Gambar belum didukung karena butuh OCR. Salin teksnya ke file .txt dulu.',
-    webp: 'Gambar belum didukung karena butuh OCR. Salin teksnya ke file .txt dulu.',
     zip: 'File ZIP belum didukung. Ekstrak dulu lalu unggah file di dalamnya.'
   };
 
   const MAX_TEXT_BYTES = 2 * 1024 * 1024;     // file teks/kode
   const MAX_BINARY_BYTES = 15 * 1024 * 1024;  // pdf, docx, xlsx, dst.
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+  const MAX_AUDIO_BYTES = 25 * 1024 * 1024;   // batas Groq Whisper (tier gratis)
+  const OCR_PDF_PAGES = 8;                    // PDF scan: OCR maksimal sekian halaman pertama
 
   const ALL_EXTS = TEXT_EXTS.concat(Object.keys(BINARY_KINDS));
   const ACCEPT = ALL_EXTS.map(e => '.' + e).join(',');
@@ -81,6 +81,13 @@
         'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
       ],
       ready: () => !!global.XLSX
+    },
+    tesseract: {
+      urls: [
+        'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js',
+        'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'
+      ],
+      ready: () => !!global.Tesseract
     },
     jszip: {
       urls: [
@@ -212,6 +219,22 @@
     return out;
   }
 
+  // OCR: satu worker dipakai ulang untuk semua halaman (bahasa Indonesia + Inggris)
+  async function ocrSession(o) {
+    await ensure('tesseract');
+    let label = 'Membaca teks';
+    const worker = await global.Tesseract.createWorker('ind+eng', 1, {
+      logger: (m) => {
+        if (m.status === 'recognizing text') o.onProgress(`${label}… ${Math.round(m.progress * 100)}%`);
+        else o.onProgress('Menyiapkan OCR…');
+      }
+    });
+    return {
+      async run(src, l) { if (l) label = l; return (await worker.recognize(src)).data.text; },
+      close() { return worker.terminate().catch(() => {}); }
+    };
+  }
+
   // ---------- Pembaca per jenis ----------
   const READERS = {
     async text(file) {
@@ -243,10 +266,25 @@
         out += `\n--- Halaman ${p} ---\n${line}\n`;
         if (out.length >= o.maxChars * 1.2) break; // cukup, tidak perlu baca seluruh PDF raksasa
       }
-      if (doc.destroy) doc.destroy();
-      if (!hasText) {
-        throw new FileReadError('PDF ini tidak punya teks yang bisa dibaca (kemungkinan hasil scan/gambar). Coba PDF versi teks atau salin teksnya ke .txt.');
+      if (!hasText) { // PDF hasil scan: OCR halaman-halaman awal
+        const n = Math.min(total, OCR_PDF_PAGES);
+        const ocr = await ocrSession(o);
+        try {
+          for (let p = 1; p <= n; p++) {
+            const page = await doc.getPage(p);
+            const vp = page.getViewport({ scale: 2 });
+            const cv = document.createElement('canvas');
+            cv.width = vp.width; cv.height = vp.height;
+            await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+            const t = (await ocr.run(cv, `OCR halaman ${p} dari ${n}`)).trim();
+            if (t) { hasText = true; out += `\n--- Halaman ${p} ---\n${t}\n`; }
+            if (out.length >= o.maxChars * 1.2) break;
+          }
+        } finally { await ocr.close(); }
+        if (hasText && total > n) out += `\n[PDF scan: hanya ${n} halaman pertama yang dibaca dengan OCR]\n`;
       }
+      if (doc.destroy) doc.destroy();
+      if (!hasText) throw new FileReadError('Tidak ada teks yang terbaca dari PDF ini, termasuk lewat OCR.');
       return out;
     },
 
@@ -299,6 +337,17 @@
       return xmlParagraphs(body, /<\/text:(?:p|h)>/, />([^<]+)</g);
     },
 
+    async image(file, o) {
+      const ocr = await ocrSession(o);
+      try { return await ocr.run(file, 'Membaca teks di gambar'); } finally { await ocr.close(); }
+    },
+
+    async audio(file, o) {
+      if (typeof o.transcribe !== 'function') throw new FileReadError('Transkrip audio belum tersedia.');
+      o.onProgress('Mentranskrip audio…');
+      return await o.transcribe(file);
+    },
+
     async rtf(file) {
       return rtfToText(await file.text());
     }
@@ -325,22 +374,23 @@
     if (UNSUPPORTED[ext]) throw new FileReadError(UNSUPPORTED[ext]);
     const kind = TEXT_SET.has(ext) ? 'text' : BINARY_KINDS[ext];
     if (!kind) {
-      throw new FileReadError(`Format .${ext || '?'} belum didukung. Yang bisa: PDF, Word (.docx), Excel (.xlsx/.xls), PowerPoint (.pptx), ODF, RTF, serta file teks/kode (.txt, .md, .json, .csv, .js, .py, .html, dll).`);
+      throw new FileReadError(`Format .${ext || '?'} belum didukung. Yang bisa: PDF (termasuk scan), Word, Excel, PowerPoint, ODF, RTF, gambar (OCR), audio/video (transkrip), serta file teks/kode (.txt, .md, .json, .csv, .js, .py, .html, dll).`);
     }
-    if (file.size > (kind === 'text' ? MAX_TEXT_BYTES : MAX_BINARY_BYTES)) {
-      throw new FileReadError(`File terlalu besar. Maksimal ${kind === 'text' ? 2 : 15} MB untuk jenis file ini.`);
+    const limit = kind === 'text' ? MAX_TEXT_BYTES : kind === 'audio' ? MAX_AUDIO_BYTES : kind === 'image' ? MAX_IMAGE_BYTES : MAX_BINARY_BYTES;
+    if (file.size > limit) {
+      throw new FileReadError(`File terlalu besar. Maksimal ${Math.round(limit / 1048576)} MB untuk jenis file ini.`);
     }
 
     let raw;
     try {
-      raw = await READERS[kind](file, { maxChars, onProgress });
+      raw = await READERS[kind](file, { maxChars, onProgress, transcribe: opts.transcribe });
     } catch (e) {
       if (e instanceof FileReadError) throw e;
       throw new FileReadError(friendlyError(e, kind));
     }
 
     const text = normalize(raw);
-    if (!text) throw new FileReadError('Tidak ada teks yang bisa dibaca dari file ini.');
+    if (!text) throw new FileReadError(kind === 'image' ? 'Tidak ada teks yang terbaca di gambar ini. DeepChat membaca teks di gambar (OCR), bukan isi foto.' : kind === 'audio' ? 'Tidak ada ucapan yang terdeteksi di audio ini.' : 'Tidak ada teks yang bisa dibaca dari file ini.');
     const truncated = text.length > maxChars;
     return {
       text: truncated ? text.slice(0, maxChars) : text,

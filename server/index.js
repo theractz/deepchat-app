@@ -8,6 +8,14 @@ const Database = require('better-sqlite3');
 const cookieParser = require('cookie-parser');
 const admin = require('firebase-admin');
 
+for (const k of ['VIKEY_BASE_URL', 'VIKEY_API_KEY', 'ADMIN_USER', 'ADMIN_PASS']) {
+  if (!process.env[k]) console.warn(`[config] ${k} belum diisi.`);
+}
+const MAX_MESSAGE_CHARS = 12000;
+const AUDIO_COST = Math.max(1, parseInt(process.env.AUDIO_CREDIT_COST || '10', 10) || 10);
+const AUDIO_EXTS = new Set(['flac', 'mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'ogg', 'wav', 'webm']);
+const inFlight = new Set(); // 1 request chat per user: cegah saldo dipakai paralel
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
@@ -60,15 +68,11 @@ db.exec(`
     credit_deducted INTEGER NOT NULL, created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_credit_tx_uid ON credit_transactions (uid, id DESC);
+  CREATE TABLE IF NOT EXISTS lite_usage (uid TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, day));
 `);
 
 const SIGNUP_CREDITS = Math.max(0, parseInt(process.env.SIGNUP_CREDITS || '0', 10) || 0);
 
-// Seed voucher contoh
-if (db.prepare('SELECT COUNT(*) AS count FROM redeem_codes').get().count === 0) {
-  db.prepare('INSERT INTO redeem_codes (code, credit_amount) VALUES (?, ?)').run('DEEPCHAT-10', 1500);
-  db.prepare('INSERT INTO redeem_codes (code, credit_amount) VALUES (?, ?)').run('COMBO-SULTAN', 35000);
-}
 
 function getOrCreateUser(uid, email) {
   db.prepare(`INSERT INTO users (uid, email, credit_balance) VALUES (?, ?, ?)
@@ -149,8 +153,6 @@ function reserveLite(uid) {
 }
 function refundLite(uid, day) { db.prepare('UPDATE lite_usage SET count = MAX(count - 1, 0) WHERE uid = ? AND day = ?').run(uid, day); }
 
-// (Jika tabel lite_usage belum ada, buat otomatis)
-db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (uid TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, day));`);
 
 // ==========================================
 // 3. MIDDLEWARE & ADMIN
@@ -158,9 +160,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS lite_usage (uid TEXT NOT NULL, day TEXT NOT 
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
+app.get('/admin.html', (req, res) => res.redirect('/panel-rahasia'));
 app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
 
 const safeEqual = (a, b) => {
   const A = Buffer.from(String(a)); const B = Buffer.from(String(b));
@@ -175,7 +176,10 @@ const isAdmin = (req, res, next) => {
   res.redirect('/admin-login.html');
 };
 
-app.post('/api/admin/login', (req, res) => {
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Terlalu banyak percobaan. Coba lagi 15 menit lagi.' } });
+const redeemLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 15, keyGenerator: (req) => req.user?.uid || req.ip, message: { error: 'Terlalu banyak percobaan kode. Coba lagi nanti.' } });
+
+app.post('/api/admin/login', loginLimiter, (req, res) => {
   const { username, password } = req.body || {};
   if (process.env.ADMIN_USER && process.env.ADMIN_PASS && safeEqual(username, process.env.ADMIN_USER) && safeEqual(password, process.env.ADMIN_PASS)) {
     res.cookie('admin_session', adminSessionToken(), { maxAge: 86400000, httpOnly: true, sameSite: 'lax', secure: req.secure });
@@ -189,9 +193,10 @@ app.get('/panel-rahasia', isAdmin, (req, res) => res.sendFile(path.join(__dirnam
 
 app.post('/api/admin/generate', isAdmin, (req, res) => {
   try {
-    const code = String(req.body?.code || '').toUpperCase().trim();
-    const qty = Number(req.body?.amount); 
-    if (!code || !Number.isInteger(qty) || qty < 1) return res.status(400).json({ error: 'Data tidak lengkap.' });
+    const prefix = String(req.body?.prefix || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24);
+    const qty = Number(req.body?.amount);
+    if (!prefix || !Number.isInteger(qty) || qty < 1) return res.status(400).json({ error: 'Data tidak lengkap.' });
+    const code = `${prefix}-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
     db.prepare('INSERT INTO redeem_codes (code, credit_amount) VALUES (?, ?)').run(code, qty);
     res.json({ message: 'Kode berhasil dibuat!', code });
   } catch (error) {
@@ -212,17 +217,20 @@ const userLimiter = rateLimit({
 
 app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
   const { uid, email } = req.user;
-  const user = getOrCreateUser(uid, email);
+  if (inFlight.has(uid)) return res.status(429).json({ error: 'Tunggu balasan sebelumnya selesai dulu.' });
+  inFlight.add(uid);
   let refundAction = null;
 
   try {
+    const user = getOrCreateUser(uid, email);
     const { modelId, persona, fileContext, fileName, skills } = req.body || {};
     const model = modelId || req.body?.model;
     const modelConfig = ALLOWED_MODELS[model];
     if (!modelConfig) return res.status(400).json({ error: 'Model tidak tersedia.' });
 
     let rawMessages = (Array.isArray(req.body.messages) ? req.body.messages : [])
-      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string');
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
     if (rawMessages.length > MAX_HISTORY_MESSAGES) rawMessages = rawMessages.slice(rawMessages.length - MAX_HISTORY_MESSAGES);
     const messages = rawMessages;
     if (messages.length === 0) return res.status(400).json({ error: 'Pesan kosong.' });
@@ -263,8 +271,8 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
       signal: AbortSignal.timeout(120000)
     });
 
-    const data = await apiResponse.json();
-    if (!apiResponse.ok) throw new Error(data.error?.message || `Gagal memanggil API ${upstream.name}`);
+    const data = await apiResponse.json().catch(() => ({}));
+    if (!apiResponse.ok) throw new Error(`Layanan AI sedang bermasalah (${apiResponse.status}). Coba lagi.`);
 
     const reply = data.choices?.[0]?.message?.content;
     if (typeof reply !== 'string') throw new Error(`Balasan API ${upstream.name} tidak valid.`);
@@ -287,7 +295,39 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
   } catch (error) {
     console.error('Chat Error:', error);
     if (refundAction) { try { refundAction(); } catch (e) {} }
-    res.status(500).json({ error: error.name === 'TimeoutError' ? 'AI terlalu lama menjawab.' : error.message });
+    res.status(500).json({ error: error.name === 'TimeoutError' ? 'AI terlalu lama menjawab.' : 'Terjadi kesalahan server. Coba lagi.' });
+  } finally {
+    inFlight.delete(uid);
+  }
+});
+
+// TRANSKRIP AUDIO (Groq Whisper). Kredit dipotong hanya kalau berhasil.
+const transcribeLimiter = rateLimit({ windowMs: 24 * 60 * 60 * 1000, max: 20, keyGenerator: (req) => req.user.uid, message: { error: 'Batas transkrip harian tercapai. Coba lagi besok.' } });
+app.post('/api/transcribe', verifyFirebaseToken, transcribeLimiter, express.raw({ type: '*/*', limit: '25mb' }), async (req, res) => {
+  const { uid, email } = req.user;
+  try {
+    if (!process.env.GROQ_API_KEY) return res.status(500).json({ error: 'Transkrip audio belum dikonfigurasi.' });
+    const name = decodeURIComponent(String(req.get('x-file-name') || 'audio.mp3')).slice(-120);
+    if (!AUDIO_EXTS.has(name.split('.').pop().toLowerCase())) return res.status(400).json({ error: 'Format audio tidak didukung.' });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'File kosong.' });
+    const user = getOrCreateUser(uid, email);
+    if (user.credit_balance < AUDIO_COST) return res.status(403).json({ error: `Saldo kurang. Transkrip audio butuh ${AUDIO_COST} kredit.` });
+
+    const form = new FormData();
+    form.append('file', new Blob([req.body]), name);
+    form.append('model', 'whisper-large-v3-turbo');
+    form.append('response_format', 'json');
+    const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` }, body: form, signal: AbortSignal.timeout(120000)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || typeof data.text !== 'string') throw new Error(`Groq ${r.status}`);
+
+    const { balance } = chargeUser(uid, 'whisper-large-v3-turbo', 0, 0, AUDIO_COST);
+    res.json({ text: data.text, cost: AUDIO_COST, remaining_balance: balance });
+  } catch (error) {
+    console.error('Transcribe Error:', error);
+    res.status(500).json({ error: error.name === 'TimeoutError' ? 'Transkrip terlalu lama.' : 'Transkrip gagal. Coba lagi.' });
   }
 });
 
@@ -297,7 +337,7 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
 app.get('/api/billing/me', verifyFirebaseToken, (req, res) => {
   try {
     const user = getOrCreateUser(req.user.uid, req.user.email);
-    res.json({ balance: user.credit_balance });
+    res.json({ balance: user.credit_balance, audio_cost: AUDIO_COST });
   } catch (error) { res.status(500).json({ error: 'Gagal mengambil saldo.' }); }
 });
 
@@ -310,7 +350,7 @@ app.get('/api/billing/transactions', verifyFirebaseToken, (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Gagal mengambil riwayat.' }); }
 });
 
-app.post('/api/redeem', verifyFirebaseToken, (req, res) => {
+app.post('/api/redeem', verifyFirebaseToken, redeemLimiter, (req, res) => {
   try {
     const { uid, email } = req.user;
     const code = req.body?.code;
@@ -336,5 +376,5 @@ app.post('/api/redeem', verifyFirebaseToken, (req, res) => {
 // 6. JALANKAN SERVER
 // ==========================================
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server jalan di port ${PORT}`);
+  console.log(`Server jalan di port ${PORT}`);
 });

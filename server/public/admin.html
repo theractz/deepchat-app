@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="theme.css">
   <style>
     html, body { overflow: auto; }
     .admin-container { max-width: 500px; margin: 40px auto; padding: 30px; background: var(--bg-glass-strong); border: 1px solid var(--border-glass); border-radius: var(--radius-lg); }
@@ -66,9 +67,6 @@
 
       if (!prefix || !amount) return alert('Isi semua kolom!');
 
-      const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
-      const finalCode = `${prefix}-${randomStr}`;
-
       const btn = document.getElementById('generateBtn');
       btn.textContent = 'Memproses...';
       btn.disabled = true;
@@ -77,14 +75,14 @@
         const res = await fetch('/api/admin/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: finalCode, amount })
+          body: JSON.stringify({ prefix, amount })
         });
 
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
 
         document.getElementById('resultBox').style.display = 'block';
-        document.getElementById('resultToken').textContent = finalCode;
+        document.getElementById('resultToken').textContent = data.code;
         document.getElementById('tokenPrefix').value = '';
       } catch (err) {
         alert(err.message);

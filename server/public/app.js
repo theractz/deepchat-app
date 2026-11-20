@@ -159,6 +159,7 @@ async function fetchCredits() {
     if (!res.ok) throw new Error(data.error || `Gagal ambil saldo`);
     state.creditBalance = Number(data.balance) || 0;
     state.creditCapacity = Number(data.capacity) || 0;
+    state.audioCost = Number(data.audio_cost) || 0;
     state.creditsError = false; state.creditsLoaded = true;
     updateCreditUI();
   } catch (err) { state.creditsError = true; updateCreditUI(); }
@@ -422,6 +423,17 @@ function renderFileChip() {
 
 function clearAttachedFile() { fileReadToken++; state.attachedFile = null; renderFileChip(); }
 
+async function transcribeAudio(f) {
+  if (!confirm(`Transkrip audio memotong ${state.audioCost || 'beberapa'} kredit. Lanjutkan?`)) {
+    const err = new DeepFileReader.FileReadError('Dibatalkan.'); err.silent = true; throw err;
+  }
+  const res = await authFetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(f.name) }, body: f });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new DeepFileReader.FileReadError(data.error || 'Transkrip gagal.');
+  if (data.remaining_balance !== undefined) { state.creditBalance = Number(data.remaining_balance) || 0; state.creditsLoaded = true; updateCreditUI(); }
+  return data.text;
+}
+
 window.handleFileUpload = async function(event) {
   const input = event.target; const file = input.files[0]; input.value = ''; 
   if (!file || !window.DeepFileReader) return;
@@ -429,12 +441,12 @@ window.handleFileUpload = async function(event) {
   state.attachedFile = { name: file.name, size: file.size, text: '', loading: true, status: 'Membaca file…', announced: false };
   renderFileChip();
   try {
-    const r = await DeepFileReader.read(file, { maxChars: MAX_FILE_CHARS, onProgress: (msg) => {
+    const r = await DeepFileReader.read(file, { maxChars: MAX_FILE_CHARS, transcribe: transcribeAudio, onProgress: (msg) => {
         if (token !== fileReadToken || !state.attachedFile) return; state.attachedFile.status = msg; renderFileChip();
     }});
     if (token !== fileReadToken) return;
     state.attachedFile = { name: file.name, size: file.size, text: r.text, truncated: r.truncated, kind: r.kind, announced: false };
-  } catch (e) { if (token !== fileReadToken) return; state.attachedFile = null; alert(e.message || 'Gagal membaca file.'); }
+  } catch (e) { if (token !== fileReadToken) return; state.attachedFile = null; if (!e.silent) alert(e.message || 'Gagal membaca file.'); }
   renderFileChip();
   document.getElementById('input')?.focus();
 };
@@ -484,7 +496,7 @@ function addMessage(role, content, saveToHistory = true, modelId = null, fileNam
   msgDiv.innerHTML = `<div class="msg-avatar" style="${role === 'ai' ? `--model-color:${modelById(modelId || state.model).color}` : ''}">${role === 'user' ? userLogo : archLogo}</div><div class="msg-content">${role === 'ai' ? formatMessage(content) : (fileName ? `<div class="msg-file">${FILE_ICON}<span>${escHtml(fileName)}</span></div><br>` : '') + escHtml(content).replace(/\n/g, '<br>')}</div>`;
   if (role === 'ai') {
     msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
-      btn.addEventListener('click', () => { navigator.clipboard.writeText(btn.getAttribute('data-code')); btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); });
+      btn.addEventListener('click', () => { navigator.clipboard?.writeText(btn.getAttribute('data-code')).catch(() => {}); btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); });
     });
   }
   document.getElementById('messages').appendChild(msgDiv);
@@ -499,7 +511,8 @@ function readHistory() { const key = historyKey(); if (!key) return {}; try { co
 function writeHistory(all) { const key = historyKey(); if (!key) return false; try { localStorage.setItem(key, JSON.stringify(all)); return true; } catch (e) { return false; } }
 function wipeLocalUserData(uid) { try { if (uid) { localStorage.removeItem(HISTORY_PREFIX + uid); localStorage.removeItem(METER_PREFIX + uid); } localStorage.removeItem('deepchat_persona'); localStorage.removeItem('deepchat_skills'); } catch (e) {} state.persona = ''; if (typeof personaInput !== 'undefined' && personaInput) personaInput.value = ''; state.skills = []; renderSkills(); }
 
-function welcomeHTML() { return `<div class="welcome" id="welcome"><div class="welcome-icon glass"><img src="logo.png" width="38" height="38" alt="DeepChat" style="object-fit:contain"></div><h2>Selamat datang di DeepChat</h2><p>Pilih model di sidebar, upload file, atau atur persona di setting.</p></div>`; }
+const STARTERS = '<div class="starters">' + ['Rangkum file yang gue upload', 'Bantu cari bug di kode gue', 'Rapikan paragraf ini', 'Jelasin konsep ini pakai contoh'].map(t => `<button type="button" class="starter">${t}</button>`).join('') + '</div>';
+function welcomeHTML() { return `<div class="welcome" id="welcome"><div class="welcome-icon glass"><img src="logo.png" width="38" height="38" alt="DeepChat" style="object-fit:contain"></div><h2>Selamat datang di DeepChat</h2><p>Pilih model di sidebar, upload file, atau atur persona di setting.</p>${STARTERS}</div>`; }
 function detachView() { state.run++; state.isTyping = false; }
 function resetChatView() { detachView(); state.currentChatId = null; state.messages = []; clearAttachedFile(); document.getElementById('messages').innerHTML = welcomeHTML(); }
 
@@ -564,7 +577,7 @@ async function sendMessage() {
   msgDiv.innerHTML = `<div class="msg-avatar" style="--model-color:${modelById(usedModel).color}">${ARCH_LOGO}</div><div class="msg-content"><span class="typing-dots" role="status"><i></i><i></i><i></i></span></div>`;
   box.appendChild(msgDiv); const bubbleEl = msgDiv.querySelector('.msg-content');
 
-  let fullText = '', streamDone = false, billing = null;
+  let fullText = '', streamDone = false, billing = null, streamError = null;
   const reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   let shown = 0, lastN = -1, lastTs = 0, timer = null, finishTyping = null;
 
@@ -618,7 +631,7 @@ async function sendMessage() {
     }
 
     if (billing) { state.creditBalance = Number(billing.remaining_balance) || 0; state.creditsLoaded = true; updateCreditUI(); }
-    streamDone = true; if (!fullText) throw new Error('Balasan kosong dari server.');
+    streamDone = true; if (!fullText) throw new Error(streamError || 'Balasan kosong dari server.');
 
     ctx.messages.push({ role: 'ai', content: fullText, model: usedModel });
     if (state.user && state.user.uid === ctx.uid) persistChat(ctx.chatId, ctx.messages, true);
@@ -626,7 +639,7 @@ async function sendMessage() {
 
     if (stillHere()) {
       if (billing) bubbleEl.insertAdjacentHTML('beforeend', `<div class="msg-cost">Potong ${fmtCost(billing.cost)} Kredit. Sisa: ${fmtCredit(billing.remaining_balance)} Kredit.</div>`);
-      msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => { btn.addEventListener('click', () => { navigator.clipboard.writeText(btn.getAttribute('data-code')); btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); }); });
+      msgDiv.querySelectorAll('.copy-code-btn').forEach(btn => { btn.addEventListener('click', () => { navigator.clipboard?.writeText(btn.getAttribute('data-code')).catch(() => {}); btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); }); });
     }
     if (!billing) await fetchCredits();
   } catch (err) {
@@ -665,7 +678,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { document
 // SKILLS
 const MAX_ENABLED_SKILLS = 3;
 const MAX_STORED_SKILLS = 10;
-const MAX_SKILL_CHARS = 6000;
+const MAX_SKILL_CHARS = 100000;
 const skillsModal = document.getElementById('skillsModal');
 const skillsEnabledHere = !!skillsModal;
 
@@ -729,7 +742,7 @@ if (skillsEnabledHere) {
   document.getElementById('closeSkillsBtn')?.addEventListener('click', () => skillsModal.classList.remove('active'));
   document.getElementById('skillFile').addEventListener('change', (e) => {
     const file = e.target.files[0]; e.target.value = ''; if (!file) return;
-    if (file.size > 200 * 1024) { alert('File terlalu besar. Maks 200 KB.'); return; }
+    if (file.size > 400 * 1024) { alert('File terlalu besar. Maks 400 KB.'); return; }
     const reader = new FileReader();
     reader.onload = () => {
       const parsed = parseSkillText(String(reader.result), file.name);
@@ -743,7 +756,7 @@ if (skillsEnabledHere) {
     const nameEl = document.getElementById('skillName'); const descEl = document.getElementById('skillDesc'); const bodyEl = document.getElementById('skillBody');
     const name = nameEl.value.trim(); const body = bodyEl.value.trim();
     if (!name || !body) { alert('Nama dan instruksi wajib diisi.'); return; }
-    if (body.length > MAX_SKILL_CHARS) { alert(`Instruksi terlalu panjang (maks ${MAX_SKILL_CHARS}).`); return; }
+    if (body.length > MAX_SKILL_CHARS) { alert(`Instruksi terlalu panjang (maks ${MAX_SKILL_CHARS.toLocaleString('id-ID')} karakter).`); return; }
     if (state.skills.length >= MAX_STORED_SKILLS) { alert(`Maksimal ${MAX_STORED_SKILLS} skill tersimpan.`); return; }
     state.skills.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, description: descEl.value.trim(), instructions: body, enabled: state.skills.filter(s => s.enabled).length < MAX_ENABLED_SKILLS });
     nameEl.value = ''; descEl.value = ''; bodyEl.value = ''; document.getElementById('skillAdd').open = false; persistSkills();
@@ -751,7 +764,11 @@ if (skillsEnabledHere) {
 }
 renderSkills();
 
+document.getElementById('messages')?.addEventListener('click', (e) => { const b = e.target.closest('.starter'); const i = document.getElementById('input'); if (!b || i.disabled) return; i.value = b.textContent; i.dispatchEvent(new Event('input')); i.focus(); });
+const w0 = document.getElementById('welcome'); if (w0) w0.outerHTML = welcomeHTML();
+
 // INIT
+const fileUploadEl = document.getElementById('fileUpload'); if (fileUploadEl && window.DeepFileReader) fileUploadEl.accept = DeepFileReader.accept;
 try { const saved = localStorage.getItem('deepchat_model'); if (saved && MODELS.some(m => m.id === saved)) state.model = saved; } catch (e) {}
 selectModel(state.model, false);
 renderAuthUI(); initAuth(); renderHistory();
