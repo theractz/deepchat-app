@@ -395,7 +395,7 @@ document.getElementById('confirmRedeem')?.addEventListener('click', async (e) =>
 });
 
 async function beliPaket(nama, harga) {
-  alert(`Pembayaran untuk ${nama} (Rp ${harga.toLocaleString('id-ID')}) belum terhubung ke payment gateway.`);
+  window.location.href = '/topup'; 
 }
 window.beliPaket = beliPaket;
 
