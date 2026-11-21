@@ -17,7 +17,7 @@ const state = {
   run: 0,
 };
 
-// DAFTAR SEMUA MODEL (Sesuai Screenshot Kamu)
+// DAFTAR SEMUA MODEL
 const MODELS = [
   { id: 'deepseek-lite',                name: 'DeepSeek Lite',       limit: 'Kuota Gratis: 20/hari', color: '#22c55e', free: true },
   { id: 'deepseek/deepseek-v4-flash',   name: 'DeepSeek V4 Flash',   limit: 'Murah & Cepat', color: '#4d6bfe' },
@@ -51,7 +51,6 @@ function renderAuthUI() {
   if (!loginBtn) return;
   const u = state.user;
 
-  // Tombol Login (hanya tampil kalau belum login)
   loginBtn.hidden = !!u;
   loginBtn.disabled = !state.authReady || state.loggingIn;
   $('loginBtnLabel').textContent = state.authError ? 'Login tidak tersedia' : state.loggingIn ? 'Membuka Google…' : state.authReady ? 'Login dengan Google' : 'Memeriksa login…';
@@ -62,7 +61,6 @@ function renderAuthUI() {
     errEl.textContent = state.authError ? 'Layanan login gagal dimuat.' : '';
   }
 
-  // Kartu Profil Mini di Bawah
   const userCard = $('userCard');
   if (userCard) userCard.hidden = !u;
 
@@ -86,7 +84,6 @@ function renderAuthUI() {
     }
   }
 
-  // Notice Login di atas Chat
   const notice = $('loginNotice');
   if (notice) {
     notice.hidden = !!u || !(state.authReady || state.authError);
@@ -393,7 +390,6 @@ document.getElementById('confirmRedeem')?.addEventListener('click', async (e) =>
     fetchCredits(); 
   } catch (err) { alert(err.message); } finally { btn.textContent = 'Tukar'; btn.disabled = false; }
 });
-
 
 // ==========================================
 // 4. FITUR UPLOAD FILE
@@ -770,19 +766,29 @@ selectModel(state.model, false);
 renderAuthUI(); initAuth(); renderHistory();
 console.log('DeepChat Ready!');
 
-// Fungsi untuk Top Up via Popup Midtrans
-window.beliPaket = async function(namaPaket, amount) {
+// ==========================================
+// 7. FUNGSI TOP UP MIDTRANS (DIPERBARUI)
+// ==========================================
+window.beliPaket = async function(event, namaPaket, amount) {
+  // Cari tombol yang diklik
+  const btn = event ? event.currentTarget : null;
+  const originalText = btn ? btn.innerHTML : '';
+
   try {
-    // 1. Dapatkan token user Firebase
     const auth = window.firebaseAuth;
     if (!auth || !auth.currentUser) {
       alert("Silakan login terlebih dahulu untuk melakukan top-up.");
       return;
     }
+
+    // Ubah tombol jadi loading
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = 'Memproses...';
+    }
+
     const idToken = await auth.currentUser.getIdToken();
 
-    // 2. Panggil API backend
-    // (Tampilkan loading di tombol atau alert sebentar)
     const response = await fetch('/api/topup/create', {
       method: 'POST',
       headers: {
@@ -798,32 +804,34 @@ window.beliPaket = async function(namaPaket, amount) {
       throw new Error(data.error || "Gagal membuat transaksi");
     }
 
-    // 3. Munculkan Popup Midtrans Snap
     if (window.snap) {
       window.snap.pay(data.token, {
         onSuccess: function(result) {
-          // Jika sukses, langsung refresh saldo user di UI (biasanya ada fungsi refresh)
           alert("Pembayaran sukses! Kredit akan segera masuk.");
-          window.location.reload(); // Reload halaman untuk update saldo
+          window.location.reload(); // Refresh halaman
         },
         onPending: function(result) {
           alert("Menunggu pembayaran. Selesaikan sesuai instruksi.");
+          if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol jika pending
         },
         onError: function(result) {
           alert("Pembayaran gagal. Silakan coba lagi.");
+          if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol jika error
         },
         onClose: function() {
           // User menutup popup sebelum bayar
           console.log('User menutup popup pembayaran');
+          if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol
         }
       });
     } else {
       alert("Sistem pembayaran (Snap.js) belum dimuat.");
+      if (btn) { btn.disabled = false; btn.innerHTML = originalText; }
     }
 
   } catch (error) {
     console.error(error);
     alert(error.message);
+    if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol jika error
   }
 };
-

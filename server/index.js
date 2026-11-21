@@ -31,6 +31,7 @@ app.set('trust proxy', 1);
 function loadServiceAccount() {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     try { return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT); } catch (e) { throw new Error('FIREBASE_SERVICE_ACCOUNT bukan JSON valid.'); }
+    
   }
   try { return require('./serviceAccountKey.json'); } catch (e) { throw new Error('Service account tidak ditemukan.'); }
 }
@@ -191,9 +192,6 @@ app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 app.get('/admin.html', (req, res) => res.redirect('/panel-rahasia'));
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/topup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'topup.html')));
-app.get('/topup-finish', (req, res) => res.sendFile(path.join(__dirname, 'public', 'topup-finish.html')));
-
 const safeEqual = (a, b) => {
   const A = Buffer.from(String(a)); const B = Buffer.from(String(b));
   return A.length === B.length && crypto.timingSafeEqual(A, B);
