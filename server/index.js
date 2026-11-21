@@ -191,6 +191,16 @@ app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 app.get('/admin.html', (req, res) => res.redirect('/panel-rahasia'));
+app.use((req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; " +
+    "script-src 'self' 'sha256-DueWcbxgRVJl6J5x2OBGlMjJ0RI9aTrwDoqaA4GHDhs=' https://app.midtrans.com https://snap-assets.midtrans.com; " +
+    "connect-src 'self' https://app.midtrans.com https://api.midtrans.com; " +
+    "frame-src 'self' https://app.midtrans.com;"
+  );
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 const safeEqual = (a, b) => {
   const A = Buffer.from(String(a)); const B = Buffer.from(String(b));
