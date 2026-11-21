@@ -769,8 +769,10 @@ console.log('DeepChat Ready!');
 // ==========================================
 // 7. FUNGSI TOP UP MIDTRANS (DIPERBARUI)
 // ==========================================
+// ==========================================
+// 7. FUNGSI TOP UP MIDTRANS (MODE REDIRECT)
+// ==========================================
 window.beliPaket = async function(event, namaPaket, amount) {
-  // Cari tombol yang diklik
   const btn = event ? event.currentTarget : null;
   const originalText = btn ? btn.innerHTML : '';
 
@@ -784,7 +786,7 @@ window.beliPaket = async function(event, namaPaket, amount) {
     // Ubah tombol jadi loading
     if (btn) {
       btn.disabled = true;
-      btn.innerHTML = 'Memproses...';
+      btn.innerHTML = 'Mengalihkan...';
     }
 
     const idToken = await auth.currentUser.getIdToken();
@@ -804,34 +806,32 @@ window.beliPaket = async function(event, namaPaket, amount) {
       throw new Error(data.error || "Gagal membuat transaksi");
     }
 
-    if (window.snap) {
-      window.snap.pay(data.token, {
-        onSuccess: function(result) {
-          alert("Pembayaran sukses! Kredit akan segera masuk.");
-          window.location.reload(); // Refresh halaman
-        },
-        onPending: function(result) {
-          alert("Menunggu pembayaran. Selesaikan sesuai instruksi.");
-          if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol jika pending
-        },
-        onError: function(result) {
-          alert("Pembayaran gagal. Silakan coba lagi.");
-          if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol jika error
-        },
-        onClose: function() {
-          // User menutup popup sebelum bayar
-          console.log('User menutup popup pembayaran');
-          if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol
-        }
-      });
+    // --- INI BAGIAN YANG DIUBAH ---
+    // Jika backend mengirim redirect_url, langsung pindahkan halaman
+    if (data.redirect_url) {
+      window.location.href = data.redirect_url; 
     } else {
-      alert("Sistem pembayaran (Snap.js) belum dimuat.");
-      if (btn) { btn.disabled = false; btn.innerHTML = originalText; }
+      throw new Error("Link pembayaran tidak ditemukan.");
     }
+    // ------------------------------
 
   } catch (error) {
     console.error(error);
     alert(error.message);
-    if (btn) { btn.disabled = false; btn.innerHTML = originalText; } // Kembalikan tombol jika error
+    // Kembalikan tombol jika error
+    if (btn) { 
+      btn.disabled = false; 
+      btn.innerHTML = originalText; 
+    }
   }
 };
+
+// Deteksi jika user kembali dari halaman pembayaran Midtrans
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('topup_success') === 'true') {
+  alert('Pembayaran berhasil! Saldo Anda akan segera diperbarui.');
+  // Hapus parameter dari URL agar tidak muncul alert lagi saat di-refresh
+  window.history.replaceState({}, document.title, window.location.pathname);
+  // Tarik saldo terbaru dari backend
+  if (typeof fetchCredits === 'function') fetchCredits();
+}

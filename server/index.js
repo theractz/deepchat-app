@@ -274,7 +274,7 @@ app.post('/api/topup/create', verifyFirebaseToken, topupLimiter, async (req, res
         email: email || undefined,
       },
       callbacks: {
-        finish: `${process.env.PUBLIC_URL || `http://localhost:${PORT}`}/topup-finish?order_id=${orderId}`,
+        finish: `${process.env.PUBLIC_URL || `http://localhost:${PORT}`}/?topup_success=true`,
       },
     };
 
