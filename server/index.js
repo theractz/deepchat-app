@@ -191,7 +191,7 @@ app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 app.get('/admin.html', (req, res) => res.redirect('/panel-rahasia'));
 app.use(express.static(path.join(__dirname, 'public')));
-pp.get('/topup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'topup.html')));
+app.get('/topup', (req, res) => res.sendFile(path.join(__dirname, 'public', 'topup.html')));
 app.get('/topup-finish', (req, res) => res.sendFile(path.join(__dirname, 'public', 'topup-finish.html')));
 
 const safeEqual = (a, b) => {
