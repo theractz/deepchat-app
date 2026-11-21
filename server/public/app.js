@@ -767,9 +767,6 @@ renderAuthUI(); initAuth(); renderHistory();
 console.log('DeepChat Ready!');
 
 // ==========================================
-// 7. FUNGSI TOP UP MIDTRANS (DIPERBARUI)
-// ==========================================
-// ==========================================
 // 7. FUNGSI TOP UP MIDTRANS (MODE REDIRECT)
 // ==========================================
 window.beliPaket = async function(event, namaPaket, amount) {
@@ -783,7 +780,6 @@ window.beliPaket = async function(event, namaPaket, amount) {
       return;
     }
 
-    // Ubah tombol jadi loading
     if (btn) {
       btn.disabled = true;
       btn.innerHTML = 'Mengalihkan...';
@@ -806,19 +802,15 @@ window.beliPaket = async function(event, namaPaket, amount) {
       throw new Error(data.error || "Gagal membuat transaksi");
     }
 
-    // --- INI BAGIAN YANG DIUBAH ---
-    // Jika backend mengirim redirect_url, langsung pindahkan halaman
     if (data.redirect_url) {
       window.location.href = data.redirect_url; 
     } else {
       throw new Error("Link pembayaran tidak ditemukan.");
     }
-    // ------------------------------
 
   } catch (error) {
     console.error(error);
     alert(error.message);
-    // Kembalikan tombol jika error
     if (btn) { 
       btn.disabled = false; 
       btn.innerHTML = originalText; 
@@ -830,8 +822,6 @@ window.beliPaket = async function(event, namaPaket, amount) {
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.get('topup_success') === 'true') {
   alert('Pembayaran berhasil! Saldo Anda akan segera diperbarui.');
-  // Hapus parameter dari URL agar tidak muncul alert lagi saat di-refresh
   window.history.replaceState({}, document.title, window.location.pathname);
-  // Tarik saldo terbaru dari backend
   if (typeof fetchCredits === 'function') fetchCredits();
 }
