@@ -7,19 +7,15 @@ const rateLimit = require('express-rate-limit');
 const Database = require('better-sqlite3');
 const cookieParser = require('cookie-parser');
 const admin = require('firebase-admin');
-const midtransClient = require('midtrans-client'); // [MIDTRANS]
 
 for (const k of ['VIKEY_BASE_URL', 'VIKEY_API_KEY', 'ADMIN_USER', 'ADMIN_PASS']) {
   if (!process.env[k]) console.warn(`[config] ${k} belum diisi.`);
 }
-// [MIDTRANS] cek config
-for (const k of ['MIDTRANS_SERVER_KEY', 'MIDTRANS_CLIENT_KEY']) {
-  if (!process.env[k]) console.warn(`[config] ${k} belum diisi.`);
-}
+
 const MAX_MESSAGE_CHARS = 12000;
 const AUDIO_COST = Math.max(1, parseInt(process.env.AUDIO_CREDIT_COST || '10', 10) || 10);
 const AUDIO_EXTS = new Set(['flac', 'mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'ogg', 'wav', 'webm']);
-const inFlight = new Set(); // 1 request chat per user: cegah saldo dipakai paralel
+const inFlight = new Set(); 
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,7 +27,6 @@ app.set('trust proxy', 1);
 function loadServiceAccount() {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     try { return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT); } catch (e) { throw new Error('FIREBASE_SERVICE_ACCOUNT bukan JSON valid.'); }
-    
   }
   try { return require('./serviceAccountKey.json'); } catch (e) { throw new Error('Service account tidak ditemukan.'); }
 }
@@ -47,18 +42,6 @@ async function verifyFirebaseToken(req, res, next) {
     res.status(401).json({ error: 'Sesi login tidak valid. Silakan login ulang.' });
   }
 }
-
-// ==========================================
-// 0b. MIDTRANS CLIENT [MIDTRANS]
-// ==========================================
-const snap = new midtransClient.Snap({
-  isProduction: process.env.MIDTRANS_IS_PRODUCTION === 'true',
-  serverKey: process.env.MIDTRANS_SERVER_KEY,
-  clientKey: process.env.MIDTRANS_CLIENT_KEY,
-});
-const MIDTRANS_TOPUP_CREDIT_RATE = Math.max(0.0001, parseFloat(process.env.MIDTRANS_TOPUP_CREDIT_RATE || '1') || 1);
-const MIDTRANS_MIN_AMOUNT = Math.max(1000, parseInt(process.env.MIDTRANS_MIN_AMOUNT || '10000', 10) || 10000);
-const MIDTRANS_MAX_AMOUNT = Math.max(MIDTRANS_MIN_AMOUNT, parseInt(process.env.MIDTRANS_MAX_AMOUNT || '1000000', 10) || 1000000);
 
 // ==========================================
 // 1. DATABASE (SQLITE)
@@ -87,22 +70,9 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_credit_tx_uid ON credit_transactions (uid, id DESC);
   CREATE TABLE IF NOT EXISTS lite_usage (uid TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, day));
-  -- [MIDTRANS] tabel order topup
-  CREATE TABLE IF NOT EXISTS topup_orders (
-    order_id TEXT PRIMARY KEY,
-    uid TEXT NOT NULL,
-    amount INTEGER NOT NULL,
-    credit_amount INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    snap_token TEXT,
-    created_at TEXT NOT NULL,
-    paid_at TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_topup_uid ON topup_orders (uid, created_at DESC);
 `);
 
 const SIGNUP_CREDITS = Math.max(0, parseInt(process.env.SIGNUP_CREDITS || '0', 10) || 0);
-
 
 function getOrCreateUser(uid, email) {
   db.prepare(`INSERT INTO users (uid, email, credit_balance) VALUES (?, ?, ?)
@@ -135,13 +105,10 @@ function buildSkillsPrompt(skills) {
 }
 
 const MODEL_PRICING = {
-  // DeepSeek (Murah)
   'deepseek/deepseek-v4-flash':   { in: 5,  out: 10 }, 
   'deepseek/deepseek-v4.1-flash': { in: 5,  out: 25 }, 
   'deepseek/deepseek-v4-pro':     { in: 8,  out: 20 }, 
-  // GLM-5.3 (Vikey: 1.350 / 4.500)
   'glm/glm-5.3-flash':            { in: 8,  out: 25 }, 
-  // GPT-6 Luna (Vikey: 720 / 3.600)
   'gpt/gpt-6-luna':               { in: 5,  out: 20 }, 
 };
 
@@ -191,17 +158,8 @@ app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 app.get('/admin.html', (req, res) => res.redirect('/panel-rahasia'));
-app.use((req, res, next) => {
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'self'; " +
-    "script-src 'self' 'sha256-DueWcbxgRVJl6J5x2OBGlMjJ0RI9aTrwDoqaA4GHDhs=' https://app.midtrans.com https://snap-assets.midtrans.com; " +
-    "connect-src 'self' https://app.midtrans.com https://api.midtrans.com; " +
-    "frame-src 'self' https://app.midtrans.com;"
-  );
-  next();
-});
 app.use(express.static(path.join(__dirname, 'public')));
+
 const safeEqual = (a, b) => {
   const A = Buffer.from(String(a)); const B = Buffer.from(String(b));
   return A.length === B.length && crypto.timingSafeEqual(A, B);
@@ -246,155 +204,6 @@ app.post('/api/admin/generate', isAdmin, (req, res) => {
 });
 
 // ==========================================
-// 3b. MIDTRANS TOPUP [MIDTRANS]
-// ==========================================
-const topupLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 10,
-  keyGenerator: (req) => req.user?.uid || req.ip,
-  message: { error: 'Terlalu banyak permintaan top-up. Coba lagi nanti.' }
-});
-
-app.post('/api/topup/create', verifyFirebaseToken, topupLimiter, async (req, res) => {
-  try {
-    const { uid, email } = req.user;
-    const amount = parseInt(req.body?.amount, 10);
-
-    if (!Number.isInteger(amount) || amount < MIDTRANS_MIN_AMOUNT || amount > MIDTRANS_MAX_AMOUNT) {
-      return res.status(400).json({
-        error: `Nominal tidak valid. Min Rp ${MIDTRANS_MIN_AMOUNT.toLocaleString('id-ID')}, max Rp ${MIDTRANS_MAX_AMOUNT.toLocaleString('id-ID')}.`
-      });
-    }
-
-    const creditAmount = Math.max(1, Math.floor(amount * MIDTRANS_TOPUP_CREDIT_RATE));
-    const orderId = `TOPUP-${String(uid).slice(0, 8)}-${Date.now()}`;
-
-    // Pastikan user ada
-    getOrCreateUser(uid, email);
-
-    db.prepare(`INSERT INTO topup_orders (order_id, uid, amount, credit_amount, status, created_at)
-                VALUES (?, ?, ?, ?, 'pending', ?)`).run(orderId, uid, amount, creditAmount, new Date().toISOString());
-
-    const parameter = {
-      transaction_details: {
-        order_id: orderId,
-        gross_amount: amount,
-      },
-      customer_details: {
-        email: email || undefined,
-      },
-      callbacks: {
-        finish: `${process.env.PUBLIC_URL || `http://localhost:${PORT}`}/?topup_success=true`,
-      },
-    };
-
-    const transaction = await snap.createTransaction(parameter);
-
-    db.prepare('UPDATE topup_orders SET snap_token = ? WHERE order_id = ?').run(transaction.token, orderId);
-
-    res.json({
-      order_id: orderId,
-      token: transaction.token,
-      redirect_url: transaction.redirect_url,
-      amount,
-      credit_amount: creditAmount,
-    });
-  } catch (error) {
-    console.error('Topup Create Error:', error);
-    res.status(500).json({ error: 'Gagal membuat transaksi top-up.' });
-  }
-});
-
-// Endpoint webhook: PUBLIK, verifikasi signature. Jangan pakai verifyFirebaseToken.
-app.post('/api/midtrans/notification', express.json(), (req, res) => {
-  try {
-    const notification = req.body || {};
-    const orderId = notification.order_id;
-
-    // [MIDTRANS] Handle request test dari dashboard Midtrans
-    if (orderId && String(orderId).startsWith('payment_notif_test_')) {
-      console.log('Menerima tes notifikasi dari Midtrans:', orderId);
-      return res.status(200).json({ status: 'success test' }); 
-    }
-
-    const statusCode = notification.status_code;
-    const grossAmount = notification.gross_amount;
-    const serverKey = process.env.MIDTRANS_SERVER_KEY;
-    const signatureKey = notification.signature_key;
-
-    if (!orderId || !statusCode || !grossAmount || !signatureKey) {
-      return res.status(400).json({ error: 'Payload tidak lengkap.' });
-    }
-
-    // 1. Verifikasi signature SHA512(order_id + status_code + gross_amount + server_key)
-    const input = orderId + statusCode + grossAmount + serverKey;
-    const expectedSignature = crypto.createHash('sha512').update(input).digest('hex');
-    if (expectedSignature !== signatureKey) {
-      console.warn('Midtrans signature mismatch:', orderId);
-      return res.status(403).json({ error: 'Invalid signature' });
-    }
-
-    // 2. Ambil order
-    const existing = db.prepare('SELECT * FROM topup_orders WHERE order_id = ?').get(orderId);
-    if (!existing) {
-      console.warn('Order tidak ditemukan:', orderId);
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    // 3. Idempotency: kalau sudah paid, jangan proses lagi
-    if (existing.status === 'paid') {
-      return res.status(200).json({ status: 'already processed' });
-    }
-
-    // 4. Validasi gross_amount cocok dengan order
-    if (Number(grossAmount) !== existing.amount) {
-      console.warn('Gross amount mismatch:', orderId, grossAmount, existing.amount);
-      return res.status(400).json({ error: 'Amount mismatch' });
-    }
-
-    const transactionStatus = notification.transaction_status;
-    const fraudStatus = notification.fraud_status;
-
-    let newStatus = null;
-    if (transactionStatus === 'capture' || transactionStatus === 'settlement') {
-      if (fraudStatus === 'accept' || !fraudStatus) newStatus = 'paid';
-    } else if (transactionStatus === 'deny' || transactionStatus === 'cancel' || transactionStatus === 'expire') {
-      newStatus = 'failed';
-    } else if (transactionStatus === 'pending') {
-      // biarkan pending
-    }
-
-    if (newStatus === 'paid') {
-      const processPayment = db.transaction(() => {
-        const updated = db.prepare(`UPDATE topup_orders SET status = 'paid', paid_at = ? WHERE order_id = ? AND status = 'pending'`)
-          .run(new Date().toISOString(), orderId);
-        if (updated.changes === 0) return false;
-
-        db.prepare('UPDATE users SET credit_balance = credit_balance + ? WHERE uid = ?')
-          .run(existing.credit_amount, existing.uid);
-
-        db.prepare(`INSERT INTO credit_transactions (uid, model_id, input_tokens, output_tokens, credit_deducted, created_at)
-                    VALUES (?, 'midtrans-topup', 0, 0, ?, ?)`)
-          .run(existing.uid, -existing.credit_amount, new Date().toISOString());
-        return true;
-      });
-
-      const success = processPayment();
-      if (!success) return res.status(200).json({ status: 'already processed' });
-      console.log(`Topup sukses: ${orderId} → +${existing.credit_amount} kredit untuk ${existing.uid}`);
-    } else if (newStatus === 'failed') {
-      db.prepare(`UPDATE topup_orders SET status = 'failed' WHERE order_id = ? AND status = 'pending'`).run(orderId);
-    }
-
-    // 5. Selalu balas 200 agar Midtrans tidak retry
-    res.status(200).json({ status: 'ok' });
-  } catch (error) {
-    console.error('Midtrans Notification Error:', error);
-    res.status(200).json({ status: 'error logged' });
-  }
-});
-
-// ==========================================
 // 4. CHAT AI (CORE LOGIC)
 // ==========================================
 const userLimiter = rateLimit({
@@ -426,7 +235,6 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
 
     const isGroq = modelConfig.provider === 'groq';
 
-    // --- CEK SALDO / KUOTA LITE ---
     if (isGroq) {
       if (!process.env.GROQ_API_KEY) return res.status(500).json({ error: 'DeepSeek Lite belum dikonfigurasi.' });
       const liteDay = reserveLite(uid);
@@ -436,7 +244,6 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
       if (user.credit_balance < 1) return res.status(403).json({ error: 'Saldo habis. Silakan Top Up.' });
     }
 
-    // --- SUSUN PROMPT ---
     const finalMessages = [];
     if (persona?.trim()) finalMessages.push({ role: 'system', content: `Persona: ${persona.trim().slice(0, MAX_PERSONA_CHARS)}.` });
     finalMessages.push({
@@ -448,7 +255,6 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
     if (fileContext?.trim()) finalMessages.push({ role: 'system', content: `File ${fileName ? `(${fileName})` : ''}:\n---\n${fileContext.slice(0, MAX_FILE_CONTEXT_CHARS)}\n---` });
     finalMessages.push(...messages);
 
-    // --- TEMBAK API ---
     const upstream = isGroq
       ? { url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY, model: modelConfig.upstreamModel, name: 'Groq' }
       : { url: `${process.env.VIKEY_BASE_URL}/chat/completions`, key: process.env.VIKEY_API_KEY, model: model, name: 'Vikey' };
@@ -468,7 +274,6 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
 
     refundAction = null;
 
-    // --- HITUNG BIAYA & POTONG SALDO ---
     if (isGroq) {
       return res.json({ reply, cost: 0, remaining_balance: user.credit_balance });
     }
@@ -490,7 +295,6 @@ app.post('/api/chat', verifyFirebaseToken, userLimiter, async (req, res) => {
   }
 });
 
-// TRANSKRIP AUDIO (Groq Whisper). Kredit dipotong hanya kalau berhasil.
 const transcribeLimiter = rateLimit({ windowMs: 24 * 60 * 60 * 1000, max: 20, keyGenerator: (req) => req.user.uid, message: { error: 'Batas transkrip harian tercapai. Coba lagi besok.' } });
 app.post('/api/transcribe', verifyFirebaseToken, transcribeLimiter, express.raw({ type: '*/*', limit: '25mb' }), async (req, res) => {
   const { uid, email } = req.user;
@@ -537,26 +341,6 @@ app.get('/api/billing/transactions', verifyFirebaseToken, (req, res) => {
                                      FROM credit_transactions WHERE uid = ? ORDER BY id DESC LIMIT ?`).all(req.user.uid, limit);
     res.json({ transactions });
   } catch (error) { res.status(500).json({ error: 'Gagal mengambil riwayat.' }); }
-});
-
-// [MIDTRANS] riwayat topup user
-app.get('/api/topup/history', verifyFirebaseToken, (req, res) => {
-  try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
-    const rows = db.prepare(`SELECT order_id, amount, credit_amount, status, created_at, paid_at
-                             FROM topup_orders WHERE uid = ? ORDER BY created_at DESC LIMIT ?`).all(req.user.uid, limit);
-    res.json({ orders: rows });
-  } catch (error) { res.status(500).json({ error: 'Gagal mengambil riwayat top-up.' }); }
-});
-
-// [MIDTRANS] cek status satu order (untuk polling frontend setelah snap.pay)
-app.get('/api/topup/status/:orderId', verifyFirebaseToken, (req, res) => {
-  try {
-    const row = db.prepare('SELECT order_id, amount, credit_amount, status, created_at, paid_at FROM topup_orders WHERE order_id = ? AND uid = ?')
-      .get(req.params.orderId, req.user.uid);
-    if (!row) return res.status(404).json({ error: 'Order tidak ditemukan.' });
-    res.json(row);
-  } catch (error) { res.status(500).json({ error: 'Gagal mengambil status order.' }); }
 });
 
 app.post('/api/redeem', verifyFirebaseToken, redeemLimiter, (req, res) => {

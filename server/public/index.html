@@ -291,21 +291,20 @@
       <!-- TAB TOP UP -->
       <div id="billingTabTopup" class="billing-content active">
         
-        <div class="package-card">
-          <div class="package-info"><h4>Paket Lite</h4><p>1.500 Kredit</p></div>
-          <button class="btn-beli" onclick="beliPaket(event, 'Lite', 3000)">Rp 3.000</button>
-        </div>
-        <div class="package-card" style="border-color: var(--accent);">
-          <div class="package-info"><h4 style="color: var(--accent);">Paket Plus</h4><p>6.000 Kredit</p></div>
-          <button class="btn-beli" onclick="beliPaket(event, 'Plus', 10000)">Rp 10.000</button>
-        </div>
-        <div class="package-card">
-          <div class="package-info"><h4>Paket Max</h4><p>35.000 Kredit</p></div>
-          <button class="btn-beli" onclick="beliPaket(event, 'Max', 50000)">Rp 50.000</button>
+        <div style="padding: 20px; text-align: center; background: var(--bg-elevated); border-radius: var(--radius-sm); border: 1px solid var(--border-glass); margin-bottom: 16px;">
+          <h4 style="margin-bottom: 8px;">Beli Kredit Manual</h4>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 16px;">Silakan hubungi Admin via WhatsApp untuk melakukan pembelian kredit. Setelah transfer, kamu akan mendapatkan kode voucher untuk dimasukkan di menu Tukar Kode.</p>
+          
+          <!-- GANTI NOMOR WA KAMU DI SINI -->
+          <a href="https://wa.me/6282245114303?text=Halo%20Admin,%20saya%20mau%20beli%20kredit%20DeepChat" target="_blank" style="display: inline-block; width: 100%; padding: 14px; background: #25D366; color: white; text-decoration: none; border-radius: var(--radius-sm); font-weight: 600; font-size: 1rem; margin-bottom: 12px;">
+            Hubungi Admin via WhatsApp
+          </a>
+          
+          <button type="button" onclick="document.getElementById('billingModal').classList.remove('active'); document.getElementById('redeemModal').classList.add('active');" style="background: none; border: none; color: var(--accent); font-size: 0.9rem; cursor: pointer; text-decoration: underline; text-underline-offset: 4px;">Sudah punya kode? Tukar di sini</button>
         </div>
         
         <!-- Tabel Transparansi Harga Model -->
-        <div style="margin-top: 16px; padding: 12px; background: var(--bg-elevated); border-radius: var(--radius-sm); border: 1px solid var(--border-glass);">
+        <div style="padding: 12px; background: var(--bg-elevated); border-radius: var(--radius-sm); border: 1px solid var(--border-glass);">
           <h4 style="font-size: 0.85rem; margin-bottom: 8px; color: var(--text-primary);">💡 Tarif Potongan Kredit (per 1000 token)</h4>
           <table style="width: 100%; font-size: 0.75rem; color: var(--text-secondary); border-collapse: collapse;">
             <tr style="border-bottom: 1px solid var(--border-glass);">
@@ -334,11 +333,6 @@
             </tr>
           </table>
           <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 8px;">*Potongan aktual menyesuaikan panjang pendeknya chat.</p>
-        </div>
-
-        <!-- Tombol Voucher -->
-        <div style="text-align: center; margin-top: 20px;">
-          <button type="button" id="openRedeemBtn" style="background: none; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer; text-decoration: underline; text-underline-offset: 4px;">Punya kode voucher? Tukar kode</button>
         </div>
       </div>
 
