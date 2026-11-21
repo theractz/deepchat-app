@@ -262,7 +262,7 @@
     </div>
   </div>
 
-  <!-- Modal Usage & Billing -->
+   <!-- Modal Usage & Billing -->
   <div class="modal" id="billingModal" role="dialog" aria-modal="true" aria-label="Usage dan Billing">
     <div class="modal-content glass" style="max-width:500px;width:95%;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
@@ -290,6 +290,8 @@
 
       <!-- TAB TOP UP -->
       <div id="billingTabTopup" class="billing-content active">
+        
+        <!-- Pilihan Paket Lama (Bisa dihapus/dibiarkan) -->
         <div class="package-card">
           <div class="package-info"><h4>Paket Lite</h4><p>1.500 Kredit</p></div>
           <button class="btn-beli" onclick="beliPaket('Lite', 3000)">Rp 3.000</button>
@@ -335,7 +337,7 @@
           <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 8px;">*Potongan aktual menyesuaikan panjang pendeknya chat.</p>
         </div>
 
-        <!-- Tombol Voucher (Sekarang Berbentuk Teks Link) -->
+        <!-- Tombol Voucher -->
         <div style="text-align: center; margin-top: 20px;">
           <button type="button" id="openRedeemBtn" style="background: none; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer; text-decoration: underline; text-underline-offset: 4px;">Punya kode voucher? Tukar kode</button>
         </div>
@@ -348,6 +350,8 @@
     </div>
   </div>
 
+  <!-- Tambahkan Snap.js Midtrans di sini (Ganti dengan Client Key kamu) -->
+ <script src="https://app.midtrans.com/snap/snap.js" data-client-key="Mid-client-8mPggar1PjJg-aQM"></script>
   <script src="filereader.js"></script>
   <script src="app.js"></script>
 </body>
