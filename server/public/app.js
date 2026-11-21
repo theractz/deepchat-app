@@ -394,10 +394,6 @@ document.getElementById('confirmRedeem')?.addEventListener('click', async (e) =>
   } catch (err) { alert(err.message); } finally { btn.textContent = 'Tukar'; btn.disabled = false; }
 });
 
-async function beliPaket(nama, harga) {
-  window.location.href = '/topup'; 
-}
-window.beliPaket = beliPaket;
 
 // ==========================================
 // 4. FITUR UPLOAD FILE
@@ -831,55 +827,3 @@ window.beliPaket = async function(namaPaket, amount) {
   }
 };
 
-window.beliPaket = async function(namaPaket, amount) {
-  try {
-    const auth = window.firebaseAuth;
-    if (!auth || !auth.currentUser) {
-      alert("Silakan login terlebih dahulu untuk melakukan top-up.");
-      return;
-    }
-    const idToken = await auth.currentUser.getIdToken();
-
-    // Opsional: Ubah teks tombol jadi loading (karena kamu pakai onclick, ini agak tricky, 
-    // jadi kita pakai alert atau variabel global aja kalau mau simpel)
-    
-    const response = await fetch('/api/topup/create', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${idToken}`
-      },
-      body: JSON.stringify({ amount: amount })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "Gagal membuat transaksi");
-    }
-
-    if (window.snap) {
-      window.snap.pay(data.token, {
-        onSuccess: function(result) {
-          alert("Pembayaran sukses! Kredit akan segera masuk.");
-          window.location.reload(); // Refresh halaman biar saldo di pojok kiri atas update
-        },
-        onPending: function(result) {
-          alert("Menunggu pembayaran. Selesaikan sesuai instruksi.");
-        },
-        onError: function(result) {
-          alert("Pembayaran gagal. Silakan coba lagi.");
-        },
-        onClose: function() {
-          console.log('User menutup popup pembayaran');
-        }
-      });
-    } else {
-      alert("Sistem pembayaran (Snap.js) belum dimuat.");
-    }
-
-  } catch (error) {
-    console.error(error);
-    alert(error.message);
-  }
-};
